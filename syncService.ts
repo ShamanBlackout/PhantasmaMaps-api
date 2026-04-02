@@ -18,8 +18,12 @@ export async function processBlockHeight(blockHeight: number): Promise<{
   transferCount: number;
   tokenSymbols: string[];
 }> {
+  if (blockHeight < 1) {
+    throw new Error(`Invalid block height ${blockHeight}: blocks start at 1`);
+  }
+
   const block = (await rpcClient.getBlockByHeight(blockHeight)) as Block;
-  const parsedBlock = extractTransfersFromBlock(block);
+  const parsedBlock = extractTransfersFromBlock(block, blockHeight);
 
   await withDatabaseTransaction(async (client) => {
     if (parsedBlock.transfers.length > 0) {

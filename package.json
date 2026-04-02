@@ -10,6 +10,7 @@
     "start": "npm run api",
     "api": "tsx apiServer.ts",
     "backfill": "tsx backfill.ts",
+    "backfill:dry-run": "tsx backfillDryRun.ts",
     "sync": "tsx syncIncremental.ts",
     "check": "tsc --noEmit",
     "test:rpc": "tsx connectPhantasma.ts",
