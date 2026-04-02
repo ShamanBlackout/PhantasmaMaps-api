@@ -1,0 +1,326 @@
+{
+  "metadata": {
+    "timestamp": "2026-04-01T22:40:18.809Z",
+    "blocksProcessed": 11,
+    "startBlock": 8681510,
+    "endBlock": 8681520
+  },
+  "transfers": [
+    {
+      "eventIndex": 3,
+      "txHash": "18580B3FB4E787DFA2C68FFA7B582318F66DE1F240E86CC3006CC18C72C1CAAC",
+      "blockHeight": 8681510,
+      "timestamp": "2026-03-23T10:10:09.000Z",
+      "tokenSymbol": "KCAL",
+      "chainName": "main",
+      "fromAddress": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "toAddress": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "amount": "500000",
+      "metadata": {
+        "sender": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "gasPayer": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "state": "Halt",
+        "contract": "token",
+        "eventKinds": [
+          "TokenSend",
+          "TokenReceive"
+        ],
+        "rawEvents": [
+          {
+            "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+            "contract": "token",
+            "kind": "TokenSend",
+            "name": "TokenSend",
+            "data": "044B43414C0420A10700046D61696E"
+          },
+          {
+            "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+            "contract": "token",
+            "kind": "TokenReceive",
+            "name": "TokenReceive",
+            "data": "044B43414C0420A10700046D61696E"
+          }
+        ]
+      }
+    },
+    {
+      "eventIndex": 3,
+      "txHash": "6285EEA24DABB3BCE0903CA13F905845BF0065F3BCDF49457D886030465639D2",
+      "blockHeight": 8681513,
+      "timestamp": "2026-03-23T10:11:32.000Z",
+      "tokenSymbol": "KCAL",
+      "chainName": "main",
+      "fromAddress": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "toAddress": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "amount": "500000",
+      "metadata": {
+        "sender": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "gasPayer": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "state": "Halt",
+        "contract": "token",
+        "eventKinds": [
+          "TokenSend",
+          "TokenReceive"
+        ],
+        "rawEvents": [
+          {
+            "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+            "contract": "token",
+            "kind": "TokenSend",
+            "name": "TokenSend",
+            "data": "044B43414C0420A10700046D61696E"
+          },
+          {
+            "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+            "contract": "token",
+            "kind": "TokenReceive",
+            "name": "TokenReceive",
+            "data": "044B43414C0420A10700046D61696E"
+          }
+        ]
+      }
+    },
+    {
+      "eventIndex": 3,
+      "txHash": "62CE73963C128433EE30036B537EEE165E9CC66982A94316E9BB5B1946856411",
+      "blockHeight": 8681517,
+      "timestamp": "2026-03-23T10:13:01.000Z",
+      "tokenSymbol": "KCAL",
+      "chainName": "main",
+      "fromAddress": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "toAddress": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "amount": "500000",
+      "metadata": {
+        "sender": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "gasPayer": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "state": "Halt",
+        "contract": "token",
+        "eventKinds": [
+          "TokenSend",
+          "TokenReceive"
+        ],
+        "rawEvents": [
+          {
+            "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+            "contract": "token",
+            "kind": "TokenSend",
+            "name": "TokenSend",
+            "data": "044B43414C0420A10700046D61696E"
+          },
+          {
+            "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+            "contract": "token",
+            "kind": "TokenReceive",
+            "name": "TokenReceive",
+            "data": "044B43414C0420A10700046D61696E"
+          }
+        ]
+      }
+    },
+    {
+      "eventIndex": 3,
+      "txHash": "9470E46A2A628859A4B11ED651DE2E642179DFE72ADE0272ECAD741CC6649EC8",
+      "blockHeight": 8681519,
+      "timestamp": "2026-03-23T10:14:14.000Z",
+      "tokenSymbol": "KCAL",
+      "chainName": "main",
+      "fromAddress": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "toAddress": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "amount": "500000",
+      "metadata": {
+        "sender": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "gasPayer": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "state": "Halt",
+        "contract": "token",
+        "eventKinds": [
+          "TokenSend",
+          "TokenReceive"
+        ],
+        "rawEvents": [
+          {
+            "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+            "contract": "token",
+            "kind": "TokenSend",
+            "name": "TokenSend",
+            "data": "044B43414C0420A10700046D61696E"
+          },
+          {
+            "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+            "contract": "token",
+            "kind": "TokenReceive",
+            "name": "TokenReceive",
+            "data": "044B43414C0420A10700046D61696E"
+          }
+        ]
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "tokenSymbol": "KCAL",
+      "balance": null,
+      "label": null,
+      "metadata": null
+    },
+    {
+      "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "tokenSymbol": "KCAL",
+      "balance": null,
+      "label": null,
+      "metadata": null
+    }
+  ],
+  "edges": [
+    {
+      "id": "18580B3FB4E787DFA2C68FFA7B582318F66DE1F240E86CC3006CC18C72C1CAAC-3",
+      "tokenSymbol": "KCAL",
+      "fromAddress": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "toAddress": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "amount": "500000",
+      "txHash": "18580B3FB4E787DFA2C68FFA7B582318F66DE1F240E86CC3006CC18C72C1CAAC",
+      "eventIndex": 3,
+      "metadata": {
+        "sender": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "gasPayer": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "state": "Halt",
+        "contract": "token",
+        "eventKinds": [
+          "TokenSend",
+          "TokenReceive"
+        ],
+        "rawEvents": [
+          {
+            "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+            "contract": "token",
+            "kind": "TokenSend",
+            "name": "TokenSend",
+            "data": "044B43414C0420A10700046D61696E"
+          },
+          {
+            "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+            "contract": "token",
+            "kind": "TokenReceive",
+            "name": "TokenReceive",
+            "data": "044B43414C0420A10700046D61696E"
+          }
+        ]
+      }
+    },
+    {
+      "id": "6285EEA24DABB3BCE0903CA13F905845BF0065F3BCDF49457D886030465639D2-3",
+      "tokenSymbol": "KCAL",
+      "fromAddress": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "toAddress": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "amount": "500000",
+      "txHash": "6285EEA24DABB3BCE0903CA13F905845BF0065F3BCDF49457D886030465639D2",
+      "eventIndex": 3,
+      "metadata": {
+        "sender": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "gasPayer": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "state": "Halt",
+        "contract": "token",
+        "eventKinds": [
+          "TokenSend",
+          "TokenReceive"
+        ],
+        "rawEvents": [
+          {
+            "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+            "contract": "token",
+            "kind": "TokenSend",
+            "name": "TokenSend",
+            "data": "044B43414C0420A10700046D61696E"
+          },
+          {
+            "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+            "contract": "token",
+            "kind": "TokenReceive",
+            "name": "TokenReceive",
+            "data": "044B43414C0420A10700046D61696E"
+          }
+        ]
+      }
+    },
+    {
+      "id": "62CE73963C128433EE30036B537EEE165E9CC66982A94316E9BB5B1946856411-3",
+      "tokenSymbol": "KCAL",
+      "fromAddress": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "toAddress": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "amount": "500000",
+      "txHash": "62CE73963C128433EE30036B537EEE165E9CC66982A94316E9BB5B1946856411",
+      "eventIndex": 3,
+      "metadata": {
+        "sender": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "gasPayer": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "state": "Halt",
+        "contract": "token",
+        "eventKinds": [
+          "TokenSend",
+          "TokenReceive"
+        ],
+        "rawEvents": [
+          {
+            "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+            "contract": "token",
+            "kind": "TokenSend",
+            "name": "TokenSend",
+            "data": "044B43414C0420A10700046D61696E"
+          },
+          {
+            "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+            "contract": "token",
+            "kind": "TokenReceive",
+            "name": "TokenReceive",
+            "data": "044B43414C0420A10700046D61696E"
+          }
+        ]
+      }
+    },
+    {
+      "id": "9470E46A2A628859A4B11ED651DE2E642179DFE72ADE0272ECAD741CC6649EC8-3",
+      "tokenSymbol": "KCAL",
+      "fromAddress": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+      "toAddress": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+      "amount": "500000",
+      "txHash": "9470E46A2A628859A4B11ED651DE2E642179DFE72ADE0272ECAD741CC6649EC8",
+      "eventIndex": 3,
+      "metadata": {
+        "sender": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "gasPayer": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+        "state": "Halt",
+        "contract": "token",
+        "eventKinds": [
+          "TokenSend",
+          "TokenReceive"
+        ],
+        "rawEvents": [
+          {
+            "address": "P2KCeb65Fa8Rhfjjfroh5iA4K6jTEqKuYWfe8LnpeYBEx26",
+            "contract": "token",
+            "kind": "TokenSend",
+            "name": "TokenSend",
+            "data": "044B43414C0420A10700046D61696E"
+          },
+          {
+            "address": "P2KFindrbe7eu3Z3CJdXh7CYwmfcobLtF38P5qvqLSJrcLK",
+            "contract": "token",
+            "kind": "TokenReceive",
+            "name": "TokenReceive",
+            "data": "044B43414C0420A10700046D61696E"
+          }
+        ]
+      }
+    }
+  ],
+  "syncState": [
+    {
+      "tokenSymbol": "KCAL",
+      "lastBlockHeight": 8681519,
+      "updatedAt": "2026-04-01T22:40:29.521Z",
+      "metadata": {
+        "transfersInRange": 4
+      }
+    }
+  ]
+}

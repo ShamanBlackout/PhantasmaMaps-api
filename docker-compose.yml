@@ -1,0 +1,30 @@
+services:
+  api:
+    build: .
+    container_name: create-maps-api
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    command: npm run api
+    restart: unless-stopped
+
+  backfill:
+    build: .
+    container_name: create-maps-backfill
+    env_file:
+      - .env
+    command: npm run backfill
+    restart: "no"
+    profiles:
+      - jobs
+
+  sync:
+    build: .
+    container_name: create-maps-sync
+    env_file:
+      - .env
+    command: npm run sync
+    restart: "no"
+    profiles:
+      - jobs
