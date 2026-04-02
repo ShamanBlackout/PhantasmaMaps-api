@@ -61,7 +61,7 @@ async function runDatabaseInsertTest() {
         }
 
         // Extract transfers
-        const blockResult = extractTransfersFromBlock(block);
+        const blockResult = extractTransfersFromBlock(block, height);
         const blockTransfers = blockResult.transfers;
         transfers.push(...blockTransfers);
 

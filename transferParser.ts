@@ -20,6 +20,21 @@ function getTimestamp(tx: TransactionData, block: Block): Date {
   return new Date(timestampSeconds * 1000);
 }
 
+function resolveBlockHeight(
+  block: Block,
+  fallbackBlockHeight?: number,
+): number {
+  const parsedBlockHeight = Number(block.height ?? fallbackBlockHeight ?? 0);
+
+  if (!Number.isInteger(parsedBlockHeight) || parsedBlockHeight < 1) {
+    throw new Error(
+      `Invalid block height ${parsedBlockHeight}: blocks start at 1`,
+    );
+  }
+
+  return parsedBlockHeight;
+}
+
 function isTokenMovementEvent(event: Event): boolean {
   const kind = event.kind.toLowerCase();
   return kind === "tokensend" || kind === "tokenreceive";
@@ -117,7 +132,11 @@ function pairTransferEvents(tx: TransactionData): ParsedTransfer[] {
   return transfers;
 }
 
-export function extractTransfersFromBlock(block: Block): ParsedBlockResult {
+export function extractTransfersFromBlock(
+  block: Block,
+  fallbackBlockHeight?: number,
+): ParsedBlockResult {
+  const resolvedBlockHeight = resolveBlockHeight(block, fallbackBlockHeight);
   const transfers: ParsedTransfer[] = [];
 
   for (const tx of block.txs ?? []) {
@@ -128,14 +147,14 @@ export function extractTransfersFromBlock(block: Block): ParsedBlockResult {
     for (const transfer of pairTransferEvents(tx)) {
       transfers.push({
         ...transfer,
-        blockHeight: Number(block.height ?? transfer.blockHeight),
+        blockHeight: resolvedBlockHeight,
         timestamp: getTimestamp(tx, block),
       });
     }
   }
 
   return {
-    blockHeight: Number(block.height ?? 0),
+    blockHeight: resolvedBlockHeight,
     transferCount: transfers.length,
     tokenSymbols: [
       ...new Set(transfers.map((transfer) => transfer.tokenSymbol)),

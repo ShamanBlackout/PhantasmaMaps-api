@@ -2,3 +2,6 @@
 .env
 .env.*
 !.env.example
+
+# Dry-run output
+backfill-dry-run.json
