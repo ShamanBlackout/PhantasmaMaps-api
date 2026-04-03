@@ -195,6 +195,12 @@ export class PhantasmaRpcClient {
     );
   }
 
+  async getToken(symbol: string): Promise<unknown> {
+    return this.execute<unknown>("metadata", `getToken(${symbol})`, (api) => {
+      return api.getToken(symbol, true);
+    });
+  }
+
   getConnectionSummary(): ConnectionSummary {
     return {
       activeRpcUrl: this.activeRpcUrl,

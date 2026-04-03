@@ -5,13 +5,113 @@ import {
   updateSyncStateForBlock,
   upsertEdges,
   upsertNodes,
+  upsertTokenMetadata,
   upsertTransfers,
   withDatabaseTransaction,
 } from "./database";
 import { createPhantasmaRpcClient } from "./rpcClient";
 import { extractTransfersFromBlock } from "./transferParser";
+import type { TokenMetadataUpsertInput } from "./phantasma.types";
 
 const rpcClient = createPhantasmaRpcClient();
+
+function readNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function readOptionalString(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeRawAmount(rawAmount: string, decimals: number): string {
+  const cleanRaw = rawAmount.trim();
+  const negative = cleanRaw.startsWith("-");
+  const digitsOnly = (negative ? cleanRaw.slice(1) : cleanRaw).replace(
+    /\D/g,
+    "",
+  );
+  const safeDigits = digitsOnly.length > 0 ? digitsOnly : "0";
+  const safeDecimals = Math.max(0, Math.floor(decimals));
+
+  if (safeDecimals === 0) {
+    return `${negative ? "-" : ""}${safeDigits}`;
+  }
+
+  const padded = safeDigits.padStart(safeDecimals + 1, "0");
+  const splitAt = padded.length - safeDecimals;
+  const integerPart = padded.slice(0, splitAt);
+  const fractionalPart = padded.slice(splitAt).replace(/0+$/, "");
+
+  if (!fractionalPart) {
+    return `${negative ? "-" : ""}${integerPart}`;
+  }
+
+  return `${negative ? "-" : ""}${integerPart}.${fractionalPart}`;
+}
+
+function getRawSupply(token: Record<string, unknown>): string {
+  const raw =
+    readOptionalString(token.currentSupply) ??
+    readOptionalString(token.supply) ??
+    readOptionalString(token.totalSupply) ??
+    "0";
+
+  return raw;
+}
+
+function getRawMaxSupply(token: Record<string, unknown>): string | null {
+  return (
+    readOptionalString(token.maxSupply) ??
+    readOptionalString(token.maximumSupply) ??
+    readOptionalString(token.totalSupply)
+  );
+}
+
+function mapRpcTokenToUpsert(
+  tokenSymbol: string,
+  tokenRaw: unknown,
+): TokenMetadataUpsertInput {
+  const token =
+    tokenRaw && typeof tokenRaw === "object"
+      ? (tokenRaw as Record<string, unknown>)
+      : {};
+
+  const decimals = Math.max(0, Math.floor(readNumber(token.decimals, 0)));
+  const currentSupplyRaw = getRawSupply(token);
+  const currentSupplyNormalized = normalizeRawAmount(
+    currentSupplyRaw,
+    decimals,
+  );
+  const maxSupplyRaw = getRawMaxSupply(token);
+  const maxSupplyNormalized =
+    maxSupplyRaw === null ? null : normalizeRawAmount(maxSupplyRaw, decimals);
+
+  return {
+    tokenSymbol,
+    name: readOptionalString(token.name),
+    decimals,
+    currentSupplyRaw,
+    currentSupplyNormalized,
+    maxSupplyRaw,
+    maxSupplyNormalized,
+    flags: {
+      isBurnable:
+        typeof token.isBurnable === "boolean" ? token.isBurnable : null,
+      isFungible:
+        typeof token.isFungible === "boolean" ? token.isFungible : null,
+      isFinite: typeof token.isFinite === "boolean" ? token.isFinite : null,
+      isTransferable:
+        typeof token.isTransferable === "boolean" ? token.isTransferable : null,
+    },
+    metadata: token,
+  };
+}
 
 function readBalancesFromAccount(account: unknown): Map<string, string> {
   const balances = new Map<string, string>();
@@ -76,6 +176,20 @@ async function fetchNodeBalancesFromRpc(
   return balancesByNodeKey;
 }
 
+async function fetchTokenMetadataFromRpc(
+  tokenSymbols: string[],
+): Promise<TokenMetadataUpsertInput[]> {
+  const uniqueSymbols = [...new Set(tokenSymbols.filter(Boolean))];
+  const items: TokenMetadataUpsertInput[] = [];
+
+  for (const tokenSymbol of uniqueSymbols) {
+    const token = await rpcClient.getToken(tokenSymbol);
+    items.push(mapRpcTokenToUpsert(tokenSymbol, token));
+  }
+
+  return items;
+}
+
 export async function processBlockHeight(blockHeight: number): Promise<{
   blockHeight: number;
   transferCount: number;
@@ -91,12 +205,32 @@ export async function processBlockHeight(blockHeight: number): Promise<{
     parsedBlock.transfers.length > 0
       ? await fetchNodeBalancesFromRpc(parsedBlock.transfers)
       : new Map<string, string>();
+  const tokenMetadata =
+    parsedBlock.tokenSymbols.length > 0
+      ? await fetchTokenMetadataFromRpc(parsedBlock.tokenSymbols)
+      : [];
+  const tokenDecimalsBySymbol = new Map<string, number>(
+    tokenMetadata.map((item) => [item.tokenSymbol, item.decimals]),
+  );
 
   await withDatabaseTransaction(async (client) => {
+    if (tokenMetadata.length > 0) {
+      await upsertTokenMetadata(client, tokenMetadata);
+    }
+
     if (parsedBlock.transfers.length > 0) {
-      await upsertTransfers(client, parsedBlock.transfers);
-      await upsertNodes(client, parsedBlock.transfers, nodeBalances);
-      await upsertEdges(client, parsedBlock.transfers);
+      await upsertTransfers(
+        client,
+        parsedBlock.transfers,
+        tokenDecimalsBySymbol,
+      );
+      await upsertNodes(
+        client,
+        parsedBlock.transfers,
+        nodeBalances,
+        tokenDecimalsBySymbol,
+      );
+      await upsertEdges(client, parsedBlock.transfers, tokenDecimalsBySymbol);
     }
 
     await updateSyncStateForBlock(

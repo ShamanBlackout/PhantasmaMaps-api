@@ -74,6 +74,7 @@ async function runDatabaseInsertTest() {
               address: transfer.fromAddress,
               tokenSymbol: transfer.tokenSymbol,
               balance: null,
+              balanceNormalized: null,
               label: null,
               metadata: null,
             });
@@ -83,6 +84,7 @@ async function runDatabaseInsertTest() {
               address: transfer.toAddress,
               tokenSymbol: transfer.tokenSymbol,
               balance: null,
+              balanceNormalized: null,
               label: null,
               metadata: null,
             });
@@ -99,6 +101,7 @@ async function runDatabaseInsertTest() {
               fromAddress: transfer.fromAddress,
               toAddress: transfer.toAddress,
               amount: transfer.amount,
+              amountNormalized: null,
               txHash: transfer.txHash,
               eventIndex: transfer.eventIndex,
               metadata: transfer.metadata || null,

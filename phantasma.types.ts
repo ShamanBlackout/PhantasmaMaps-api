@@ -35,6 +35,7 @@ export interface GraphNodeRecord {
   address: string;
   tokenSymbol: string;
   balance: string | null;
+  balanceNormalized: string | null;
   label: string | null;
   metadata: Record<string, unknown> | null;
 }
@@ -45,6 +46,7 @@ export interface GraphEdgeRecord {
   fromAddress: string;
   toAddress: string;
   amount: string | null;
+  amountNormalized: string | null;
   txHash: string;
   eventIndex: number;
   metadata: Record<string, unknown> | null;
@@ -75,6 +77,31 @@ export interface TopHoldersResult {
   tokenSymbol: string;
   limit: number;
   items: TopHolderRecord[];
+}
+
+export interface TokenMetadataRecord {
+  tokenSymbol: string;
+  name: string | null;
+  decimals: number;
+  currentSupplyRaw: string;
+  currentSupplyNormalized: string;
+  maxSupplyRaw: string | null;
+  maxSupplyNormalized: string | null;
+  flags: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
+  updatedAt: Date | null;
+}
+
+export interface TokenMetadataUpsertInput {
+  tokenSymbol: string;
+  name: string | null;
+  decimals: number;
+  currentSupplyRaw: string;
+  currentSupplyNormalized: string;
+  maxSupplyRaw: string | null;
+  maxSupplyNormalized: string | null;
+  flags: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
 }
 
 export interface TokenEventMatch {

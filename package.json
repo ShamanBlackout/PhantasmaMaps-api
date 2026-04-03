@@ -12,6 +12,7 @@
     "backfill": "tsx backfill.ts",
     "backfill:dry-run": "tsx backfillDryRun.ts",
     "sync": "tsx syncIncremental.ts",
+    "sync:nodes-normalized": "tsx syncNodeBalancesNormalized.ts",
     "find-first-transfer": "tsx findFirstTransferBlock.ts",
     "check": "tsc --noEmit",
     "test:rpc": "tsx connectPhantasma.ts",
