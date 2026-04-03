@@ -55,7 +55,7 @@ export const rpcConfig = {
 } as const;
 
 export const syncConfig = {
-  initialBackfillStartBlock: 1,
+  initialBackfillStartBlock: 6422526,
   blockLogInterval: readNumber("PHANTASMA_SYNC_BLOCK_LOG_INTERVAL", 100),
   captureRawEvents: readBoolean("PHANTASMA_CAPTURE_RAW_EVENTS", true),
 } as const;

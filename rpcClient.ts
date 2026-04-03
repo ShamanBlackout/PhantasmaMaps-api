@@ -64,14 +64,15 @@ class RequestScheduler {
 
   async schedule<T>(task: () => Promise<T>): Promise<T> {
     const run = async (): Promise<T> => {
-      const waitMs = Math.max(
-        0,
-        this.lastStartAt + this.minIntervalMs - Date.now(),
-      );
-
-      if (waitMs > 0) {
-        await sleep(waitMs);
-      }
+      // Rate limiting disabled for testing
+      // const waitMs = Math.max(
+      //   0,
+      //   this.lastStartAt + this.minIntervalMs - Date.now(),
+      // );
+      //
+      // if (waitMs > 0) {
+      //   await sleep(waitMs);
+      // }
 
       this.lastStartAt = Date.now();
       return task();
@@ -182,6 +183,16 @@ export class PhantasmaRpcClient {
     return this.execute<unknown>("metadata", "getChains", (api) => {
       return api.getChains(false);
     });
+  }
+
+  async getAccount(address: string): Promise<unknown> {
+    return this.execute<unknown>(
+      "metadata",
+      `getAccount(${address})`,
+      (api) => {
+        return api.getAccount(address, true);
+      },
+    );
   }
 
   getConnectionSummary(): ConnectionSummary {

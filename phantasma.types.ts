@@ -65,6 +65,18 @@ export interface PaginatedTransactionsResult {
   items: Array<Record<string, unknown>>;
 }
 
+export interface TopHolderRecord {
+  address: string;
+  tokenSymbol: string;
+  netBalance: string;
+}
+
+export interface TopHoldersResult {
+  tokenSymbol: string;
+  limit: number;
+  items: TopHolderRecord[];
+}
+
 export interface TokenEventMatch {
   event: Event;
   eventIndex: number;

@@ -13,6 +13,69 @@ import { extractTransfersFromBlock } from "./transferParser";
 
 const rpcClient = createPhantasmaRpcClient();
 
+function readBalancesFromAccount(account: unknown): Map<string, string> {
+  const balances = new Map<string, string>();
+
+  if (!account || typeof account !== "object") {
+    return balances;
+  }
+
+  const rawBalances = (account as { balances?: unknown }).balances;
+
+  if (!Array.isArray(rawBalances)) {
+    return balances;
+  }
+
+  for (const item of rawBalances) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const symbol = String((item as { symbol?: unknown }).symbol ?? "").trim();
+    const amount = (item as { amount?: unknown }).amount;
+
+    if (!symbol) {
+      continue;
+    }
+
+    balances.set(symbol, String(amount ?? "0"));
+  }
+
+  return balances;
+}
+
+async function fetchNodeBalancesFromRpc(
+  transfers: Array<{
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+  }>,
+): Promise<Map<string, string>> {
+  const tokenSetByAddress = new Map<string, Set<string>>();
+
+  for (const transfer of transfers) {
+    for (const address of [transfer.fromAddress, transfer.toAddress]) {
+      const set = tokenSetByAddress.get(address) ?? new Set<string>();
+      set.add(transfer.tokenSymbol);
+      tokenSetByAddress.set(address, set);
+    }
+  }
+
+  const balancesByNodeKey = new Map<string, string>();
+
+  for (const [address, tokenSet] of tokenSetByAddress.entries()) {
+    const account = await rpcClient.getAccount(address);
+    const balanceBySymbol = readBalancesFromAccount(account);
+
+    for (const tokenSymbol of tokenSet) {
+      const key = `${tokenSymbol}:${address}`;
+      balancesByNodeKey.set(key, balanceBySymbol.get(tokenSymbol) ?? "0");
+    }
+  }
+
+  return balancesByNodeKey;
+}
+
 export async function processBlockHeight(blockHeight: number): Promise<{
   blockHeight: number;
   transferCount: number;
@@ -24,11 +87,15 @@ export async function processBlockHeight(blockHeight: number): Promise<{
 
   const block = (await rpcClient.getBlockByHeight(blockHeight)) as Block;
   const parsedBlock = extractTransfersFromBlock(block, blockHeight);
+  const nodeBalances =
+    parsedBlock.transfers.length > 0
+      ? await fetchNodeBalancesFromRpc(parsedBlock.transfers)
+      : new Map<string, string>();
 
   await withDatabaseTransaction(async (client) => {
     if (parsedBlock.transfers.length > 0) {
       await upsertTransfers(client, parsedBlock.transfers);
-      await upsertNodes(client, parsedBlock.transfers);
+      await upsertNodes(client, parsedBlock.transfers, nodeBalances);
       await upsertEdges(client, parsedBlock.transfers);
     }
 
