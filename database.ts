@@ -205,6 +205,46 @@ export async function getTrackedTokenSymbolsFromSyncState(): Promise<string[]> {
   return result.rows.map((row) => row.token_symbol);
 }
 
+export async function getTrackedNodeAddressTokens(): Promise<
+  Array<{ address: string; tokenSymbol: string }>
+> {
+  const result = await databasePool.query<{
+    address: string;
+    token_symbol: string;
+  }>(
+    `SELECT address, token_symbol
+       FROM nodes
+      ORDER BY address ASC, token_symbol ASC`,
+  );
+
+  return result.rows.map((row) => ({
+    address: row.address,
+    tokenSymbol: row.token_symbol,
+  }));
+}
+
+export async function updateTrackedNodeBalances(
+  client: PoolClient,
+  items: Array<{ address: string; tokenSymbol: string; balance: string }>,
+): Promise<number> {
+  let updatedCount = 0;
+
+  for (const item of items) {
+    const result = await client.query(
+      `UPDATE nodes
+          SET balance = $3
+        WHERE address = $1
+          AND token_symbol = $2
+          AND balance IS DISTINCT FROM $3`,
+      [item.address, item.tokenSymbol, item.balance],
+    );
+
+    updatedCount += result.rowCount ?? 0;
+  }
+
+  return updatedCount;
+}
+
 export async function upsertTransfers(
   client: PoolClient,
   transfers: ParsedTransfer[],
