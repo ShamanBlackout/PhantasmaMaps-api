@@ -7,6 +7,7 @@ import {
   getAvailableTokens,
   getFullTokenGraph,
   getSyncStates,
+  getTokenMetadata,
   getTopHolders,
   getTransactionsPage,
   testDatabaseConnection,
@@ -69,6 +70,27 @@ app.get("/tokens", async (_request: Request, response: Response) => {
       .json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
+
+app.get(
+  "/tokens/:tokenSymbol/metadata",
+  async (request: Request, response: Response) => {
+    try {
+      const tokenSymbol = String(request.params.tokenSymbol);
+      const metadata = await getTokenMetadata(tokenSymbol);
+
+      if (!metadata) {
+        response.status(404).json({ error: "token metadata not found" });
+        return;
+      }
+
+      response.json(metadata);
+    } catch (error: unknown) {
+      response.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
 
 app.get(
   "/graph/address/:address",

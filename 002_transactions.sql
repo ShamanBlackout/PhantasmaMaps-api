@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 
     -- Value transferred
     amount NUMERIC,
+    amount_normalized NUMERIC,
 
     -- Raw RPC payload or extra fields
     metadata JSONB
@@ -26,6 +27,9 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 ALTER TABLE transactions
     ADD COLUMN IF NOT EXISTS event_index INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE transactions
+    ADD COLUMN IF NOT EXISTS amount_normalized NUMERIC;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_hash_event
     ON transactions(tx_hash, event_index);
@@ -45,3 +49,6 @@ CREATE INDEX IF NOT EXISTS idx_tx_to
 
 CREATE INDEX IF NOT EXISTS idx_tx_timestamp
     ON transactions(timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_tx_token_amount_normalized
+    ON transactions(token_symbol, amount_normalized DESC);
