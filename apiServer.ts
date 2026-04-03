@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from "express";
+import cors from "cors";
 import { apiConfig } from "./phantasma.config";
 import {
   closeDatabasePool,
@@ -6,6 +7,7 @@ import {
   getAvailableTokens,
   getFullTokenGraph,
   getSyncStates,
+  getTopHolders,
   getTransactionsPage,
   testDatabaseConnection,
 } from "./database";
@@ -20,6 +22,18 @@ function readPositiveInt(value: string | undefined, fallback: number): number {
 }
 
 const app = express();
+
+const allowedOrigins = String(process.env.PHANTASMA_API_CORS_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: allowedOrigins.length > 0 ? allowedOrigins : true,
+  }),
+);
+
 app.use(express.json());
 
 app.get("/health", async (_request: Request, response: Response) => {
@@ -27,12 +41,10 @@ app.get("/health", async (_request: Request, response: Response) => {
     await testDatabaseConnection();
     response.json({ ok: true });
   } catch (error: unknown) {
-    response
-      .status(500)
-      .json({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    response.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 });
 
@@ -85,11 +97,28 @@ app.get(
       );
       response.json(graph);
     } catch (error: unknown) {
-      response
-        .status(500)
-        .json({
-          error: error instanceof Error ? error.message : String(error),
-        });
+      response.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.get(
+  "/tokens/:tokenSymbol/top-holders",
+  async (request: Request, response: Response) => {
+    const limit = readPositiveInt(String(request.query.limit ?? ""), 10);
+
+    try {
+      const result = await getTopHolders(
+        String(request.params.tokenSymbol),
+        Math.min(limit, 100),
+      );
+      response.json(result);
+    } catch (error: unknown) {
+      response.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   },
 );
@@ -101,11 +130,9 @@ app.get(
       const graph = await getFullTokenGraph(String(request.params.tokenSymbol));
       response.json(graph);
     } catch (error: unknown) {
-      response
-        .status(500)
-        .json({
-          error: error instanceof Error ? error.message : String(error),
-        });
+      response.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   },
 );

@@ -13,6 +13,7 @@ import {
   type PaginatedTransactionsResult,
   type ParsedTransfer,
   type SyncStateRecord,
+  type TopHoldersResult,
 } from "./phantasma.types";
 
 function buildPoolConfig(): PoolConfig {
@@ -159,6 +160,7 @@ export async function upsertTransfers(
 export async function upsertNodes(
   client: PoolClient,
   transfers: ParsedTransfer[],
+  balancesByNodeKey: Map<string, string>,
 ): Promise<void> {
   const nodeMap = new Map<
     string,
@@ -183,12 +185,16 @@ export async function upsertNodes(
   }
 
   for (const node of nodeMap.values()) {
+    const nodeKey = `${node.tokenSymbol}:${node.address}`;
+    const balance = balancesByNodeKey.get(nodeKey) ?? "0";
+
     await client.query(
       `INSERT INTO nodes (address, token_symbol, balance, metadata)
-       VALUES ($1, $2, NULL, $3)
+       VALUES ($1, $2, $3, $4)
        ON CONFLICT (address, token_symbol) DO UPDATE
-         SET metadata = COALESCE(nodes.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb)`,
-      [node.address, node.tokenSymbol, node.metadata],
+         SET balance = EXCLUDED.balance,
+             metadata = COALESCE(nodes.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb)`,
+      [node.address, node.tokenSymbol, balance, node.metadata],
     );
   }
 }
@@ -247,6 +253,48 @@ export async function updateSyncStateForBlock(
       ],
     );
   }
+}
+
+export async function getTopHolders(
+  tokenSymbol: string,
+  limit: number,
+): Promise<TopHoldersResult> {
+  const result = await databasePool.query<{
+    address: string;
+    net_balance: string;
+  }>(
+    `SELECT address,
+            SUM(received) - SUM(sent) AS net_balance
+       FROM (
+         SELECT to_address   AS address,
+                COALESCE(SUM(amount), 0) AS received,
+                0                        AS sent
+           FROM transactions
+          WHERE token_symbol = $1
+          GROUP BY to_address
+         UNION ALL
+         SELECT from_address AS address,
+                0            AS received,
+                COALESCE(SUM(amount), 0) AS sent
+           FROM transactions
+          WHERE token_symbol = $1
+          GROUP BY from_address
+       ) t
+      GROUP BY address
+      ORDER BY net_balance DESC
+      LIMIT $2`,
+    [tokenSymbol, limit],
+  );
+
+  return {
+    tokenSymbol,
+    limit,
+    items: result.rows.map((row) => ({
+      address: row.address,
+      tokenSymbol,
+      netBalance: String(row.net_balance),
+    })),
+  };
 }
 
 export async function getAvailableTokens(): Promise<string[]> {
