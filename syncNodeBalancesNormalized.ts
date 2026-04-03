@@ -1,10 +1,12 @@
 import {
   closeDatabasePool,
+  getTrackedNodeAddressTokens,
   getTrackedTokenSymbolsFromSyncState,
   syncEdgeAmountsNormalized,
   syncNodeBalancesNormalized,
   syncTransactionAmountsNormalized,
   testDatabaseConnection,
+  updateTrackedNodeBalances,
   upsertTokenMetadata,
   withDatabaseTransaction,
 } from "./database";
@@ -25,6 +27,23 @@ function readOptionalString(value: unknown): string | null {
 
   const normalized = String(value).trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeIntegerString(value: unknown): string {
+  const normalized = readOptionalString(value) ?? "0";
+  const negative = normalized.startsWith("-");
+  const digitsOnly = (negative ? normalized.slice(1) : normalized).replace(
+    /\D/g,
+    "",
+  );
+  const safeDigits = digitsOnly.length > 0 ? digitsOnly : "0";
+  return `${negative ? "-" : ""}${safeDigits}`;
+}
+
+function addIntegerStrings(left: unknown, right: unknown): string {
+  return (
+    BigInt(normalizeIntegerString(left)) + BigInt(normalizeIntegerString(right))
+  ).toString();
 }
 
 function normalizeRawAmount(rawAmount: string, decimals: number): string {
@@ -105,6 +124,52 @@ function mapRpcTokenToUpsert(
   };
 }
 
+function readBalancesFromAccount(account: unknown): Map<string, string> {
+  const balances = new Map<string, string>();
+
+  if (!account || typeof account !== "object") {
+    return balances;
+  }
+
+  const accountRecord = account as {
+    balances?: unknown;
+    stake?: unknown;
+    unclaimed?: unknown;
+  };
+  const rawBalances = accountRecord.balances;
+
+  if (!Array.isArray(rawBalances)) {
+    return balances;
+  }
+
+  for (const item of rawBalances) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const symbol = String((item as { symbol?: unknown }).symbol ?? "").trim();
+    const amount = (item as { amount?: unknown }).amount;
+
+    if (!symbol) {
+      continue;
+    }
+
+    if (symbol === "SOUL") {
+      balances.set(symbol, addIntegerStrings(amount, accountRecord.stake));
+      continue;
+    }
+
+    if (symbol === "KCAL") {
+      balances.set(symbol, addIntegerStrings(amount, accountRecord.unclaimed));
+      continue;
+    }
+
+    balances.set(symbol, normalizeIntegerString(amount));
+  }
+
+  return balances;
+}
+
 async function backfillTokenMetadataFromSyncState(): Promise<{
   tokenCount: number;
 }> {
@@ -128,6 +193,49 @@ async function backfillTokenMetadataFromSyncState(): Promise<{
   return { tokenCount: items.length };
 }
 
+async function refreshTrackedNodeBalancesFromRpc(): Promise<{
+  addressCount: number;
+  updatedCount: number;
+}> {
+  const trackedNodes = await getTrackedNodeAddressTokens();
+
+  if (trackedNodes.length === 0) {
+    return {
+      addressCount: 0,
+      updatedCount: 0,
+    };
+  }
+
+  const tokenSetByAddress = new Map<string, Set<string>>();
+
+  for (const node of trackedNodes) {
+    const tokenSet = tokenSetByAddress.get(node.address) ?? new Set<string>();
+    tokenSet.add(node.tokenSymbol);
+    tokenSetByAddress.set(node.address, tokenSet);
+  }
+
+  let updatedCount = 0;
+
+  for (const [address, tokenSet] of tokenSetByAddress.entries()) {
+    const account = await rpcClient.getAccount(address);
+    const balancesBySymbol = readBalancesFromAccount(account);
+    const updates = [...tokenSet].map((tokenSymbol) => ({
+      address,
+      tokenSymbol,
+      balance: balancesBySymbol.get(tokenSymbol) ?? "0",
+    }));
+
+    updatedCount += await withDatabaseTransaction((client) => {
+      return updateTrackedNodeBalances(client, updates);
+    });
+  }
+
+  return {
+    addressCount: tokenSetByAddress.size,
+    updatedCount,
+  };
+}
+
 async function run(): Promise<void> {
   const startedAt = Date.now();
 
@@ -137,6 +245,11 @@ async function run(): Promise<void> {
     const metadataBackfill = await backfillTokenMetadataFromSyncState();
     console.log(
       `Token metadata backfill complete. tokens=${metadataBackfill.tokenCount}`,
+    );
+
+    const nodeBalanceRefresh = await refreshTrackedNodeBalancesFromRpc();
+    console.log(
+      `Node raw balance refresh complete. addresses=${nodeBalanceRefresh.addressCount}, updated=${nodeBalanceRefresh.updatedCount}`,
     );
 
     const result = await syncNodeBalancesNormalized();

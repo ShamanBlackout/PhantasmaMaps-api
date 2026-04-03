@@ -29,6 +29,23 @@ function readOptionalString(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function normalizeIntegerString(value: unknown): string {
+  const normalized = readOptionalString(value) ?? "0";
+  const negative = normalized.startsWith("-");
+  const digitsOnly = (negative ? normalized.slice(1) : normalized).replace(
+    /\D/g,
+    "",
+  );
+  const safeDigits = digitsOnly.length > 0 ? digitsOnly : "0";
+  return `${negative ? "-" : ""}${safeDigits}`;
+}
+
+function addIntegerStrings(left: unknown, right: unknown): string {
+  return (
+    BigInt(normalizeIntegerString(left)) + BigInt(normalizeIntegerString(right))
+  ).toString();
+}
+
 function normalizeRawAmount(rawAmount: string, decimals: number): string {
   const cleanRaw = rawAmount.trim();
   const negative = cleanRaw.startsWith("-");
@@ -120,7 +137,13 @@ function readBalancesFromAccount(account: unknown): Map<string, string> {
     return balances;
   }
 
-  const rawBalances = (account as { balances?: unknown }).balances;
+  const accountRecord = account as {
+    balances?: unknown;
+    stake?: unknown;
+    unclaimed?: unknown;
+  };
+
+  const rawBalances = accountRecord.balances;
 
   if (!Array.isArray(rawBalances)) {
     return balances;
@@ -135,6 +158,16 @@ function readBalancesFromAccount(account: unknown): Map<string, string> {
     const amount = (item as { amount?: unknown }).amount;
 
     if (!symbol) {
+      continue;
+    }
+
+    if (symbol === "SOUL") {
+      balances.set(symbol, addIntegerStrings(amount, accountRecord.stake));
+      continue;
+    }
+
+    if (symbol === "KCAL") {
+      balances.set(symbol, addIntegerStrings(amount, accountRecord.unclaimed));
       continue;
     }
 
