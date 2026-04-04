@@ -85,6 +85,67 @@ function normalizeRawAmount(rawAmount: string, decimals: number): string {
   return `${negative ? "-" : ""}${integerPart}.${fractionalPart}`;
 }
 
+function isTokenFungible(
+  flags: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!flags) {
+    return false;
+  }
+
+  const directFlag = flags.isFungible;
+
+  if (typeof directFlag === "boolean") {
+    return directFlag;
+  }
+
+  if (typeof directFlag === "string") {
+    return directFlag.toLowerCase() === "true";
+  }
+
+  const flagValues = Object.values(flags)
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.toLowerCase());
+
+  if (flagValues.includes("fungible")) {
+    return true;
+  }
+
+  if (
+    flagValues.includes("nonfungible") ||
+    flagValues.includes("non-fungible")
+  ) {
+    return false;
+  }
+
+  return false;
+}
+
+function resolveStoredTransferAmounts(
+  rawAmount: string,
+  tokenMetadata:
+    | Pick<TokenMetadataUpsertInput, "decimals" | "flags">
+    | undefined,
+): { amount: string; amountNormalized: string } {
+  if (!tokenMetadata) {
+    return {
+      amount: "1",
+      amountNormalized: "1",
+    };
+  }
+
+  if (!isTokenFungible(tokenMetadata.flags)) {
+    return {
+      amount: "1",
+      amountNormalized: "1",
+    };
+  }
+
+  return {
+    amount: rawAmount,
+    amountNormalized: normalizeRawAmount(rawAmount, tokenMetadata.decimals),
+  };
+}
+
 function mapGraphEdgeRow(row: QueryResultRow): GraphEdgeRecord {
   return {
     id: String(row.id),
@@ -123,7 +184,14 @@ function mapTransactionRow(row: QueryResultRow): Record<string, unknown> {
   return {
     id: String(row.id),
     txHash: String(row.tx_hash),
-    eventIndex: Number(row.event_index),
+    eventIndex:
+      row.event_index === null || row.event_index === undefined
+        ? null
+        : Number(row.event_index),
+    eventIndexes: Array.isArray(row.event_indexes)
+      ? row.event_indexes.map((value: unknown) => Number(value))
+      : [],
+    transferCount: Number(row.transfer_count ?? 1),
     tokenSymbol: String(row.token_symbol),
     blockHeight: Number(row.block_height),
     timestamp: row.timestamp,
@@ -134,7 +202,14 @@ function mapTransactionRow(row: QueryResultRow): Record<string, unknown> {
       row.amount_normalized === null ? null : String(row.amount_normalized),
     metadata: (row.metadata as Record<string, unknown> | null) ?? null,
     tx_hash: String(row.tx_hash),
-    event_index: Number(row.event_index),
+    event_index:
+      row.event_index === null || row.event_index === undefined
+        ? null
+        : Number(row.event_index),
+    event_indexes: Array.isArray(row.event_indexes)
+      ? row.event_indexes.map((value: unknown) => Number(value))
+      : [],
+    transfer_count: Number(row.transfer_count ?? 1),
     token_symbol: String(row.token_symbol),
     block_height: Number(row.block_height),
     from_address: String(row.from_address),
@@ -248,11 +323,16 @@ export async function updateTrackedNodeBalances(
 export async function upsertTransfers(
   client: PoolClient,
   transfers: ParsedTransfer[],
-  tokenDecimalsBySymbol: Map<string, number>,
+  tokenMetadataBySymbol: Map<
+    string,
+    Pick<TokenMetadataUpsertInput, "decimals" | "flags">
+  >,
 ): Promise<void> {
   for (const transfer of transfers) {
-    const decimals = tokenDecimalsBySymbol.get(transfer.tokenSymbol) ?? 0;
-    const amountNormalized = normalizeRawAmount(transfer.amount, decimals);
+    const storedAmounts = resolveStoredTransferAmounts(
+      transfer.amount,
+      tokenMetadataBySymbol.get(transfer.tokenSymbol),
+    );
 
     await client.query(
       `INSERT INTO transactions (
@@ -284,8 +364,8 @@ export async function upsertTransfers(
         transfer.timestamp,
         transfer.fromAddress,
         transfer.toAddress,
-        transfer.amount,
-        amountNormalized,
+        storedAmounts.amount,
+        storedAmounts.amountNormalized,
         transfer.metadata,
       ],
     );
@@ -300,17 +380,29 @@ export async function syncTransactionAmountsNormalized(): Promise<{
   const usingMetadataResult = await databasePool.query<{ count: string }>(
     `WITH updated AS (
        UPDATE transactions t
-          SET amount_normalized = CASE
-            WHEN tm.decimals <= 0 THEN t.amount
-            ELSE t.amount / POWER(10::numeric, tm.decimals)
-          END
+          SET amount = CASE
+                WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
+                ELSE t.amount
+              END,
+              amount_normalized = CASE
+                WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
+                WHEN tm.decimals <= 0 THEN t.amount
+                ELSE t.amount / POWER(10::numeric, tm.decimals)
+              END
          FROM token_metadata tm
         WHERE tm.token_symbol = t.token_symbol
           AND t.amount IS NOT NULL
-          AND t.amount_normalized IS DISTINCT FROM CASE
-            WHEN tm.decimals <= 0 THEN t.amount
-            ELSE t.amount / POWER(10::numeric, tm.decimals)
-          END
+          AND (
+            t.amount IS DISTINCT FROM CASE
+              WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
+              ELSE t.amount
+            END
+            OR t.amount_normalized IS DISTINCT FROM CASE
+              WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
+              WHEN tm.decimals <= 0 THEN t.amount
+              ELSE t.amount / POWER(10::numeric, tm.decimals)
+            END
+          )
       RETURNING 1
      )
      SELECT COUNT(*)::text AS count FROM updated`,
@@ -319,14 +411,18 @@ export async function syncTransactionAmountsNormalized(): Promise<{
   const fallbackResult = await databasePool.query<{ count: string }>(
     `WITH updated AS (
        UPDATE transactions t
-          SET amount_normalized = t.amount
+          SET amount = 1::numeric,
+              amount_normalized = 1::numeric
         WHERE t.amount IS NOT NULL
           AND NOT EXISTS (
             SELECT 1
               FROM token_metadata tm
              WHERE tm.token_symbol = t.token_symbol
           )
-          AND t.amount_normalized IS DISTINCT FROM t.amount
+          AND (
+            t.amount IS DISTINCT FROM 1::numeric
+            OR t.amount_normalized IS DISTINCT FROM 1::numeric
+          )
       RETURNING 1
      )
      SELECT COUNT(*)::text AS count FROM updated`,
@@ -447,11 +543,16 @@ export async function syncNodeBalancesNormalized(): Promise<{
 export async function upsertEdges(
   client: PoolClient,
   transfers: ParsedTransfer[],
-  tokenDecimalsBySymbol: Map<string, number>,
+  tokenMetadataBySymbol: Map<
+    string,
+    Pick<TokenMetadataUpsertInput, "decimals" | "flags">
+  >,
 ): Promise<void> {
   for (const transfer of transfers) {
-    const decimals = tokenDecimalsBySymbol.get(transfer.tokenSymbol) ?? 0;
-    const amountNormalized = normalizeRawAmount(transfer.amount, decimals);
+    const storedAmounts = resolveStoredTransferAmounts(
+      transfer.amount,
+      tokenMetadataBySymbol.get(transfer.tokenSymbol),
+    );
 
     await client.query(
       `INSERT INTO edges (
@@ -469,8 +570,8 @@ export async function upsertEdges(
         transfer.tokenSymbol,
         transfer.fromAddress,
         transfer.toAddress,
-        transfer.amount,
-        amountNormalized,
+        storedAmounts.amount,
+        storedAmounts.amountNormalized,
         transfer.txHash,
         transfer.eventIndex,
         transfer.metadata,
@@ -487,17 +588,29 @@ export async function syncEdgeAmountsNormalized(): Promise<{
   const usingMetadataResult = await databasePool.query<{ count: string }>(
     `WITH updated AS (
        UPDATE edges e
-          SET amount_normalized = CASE
-            WHEN tm.decimals <= 0 THEN e.amount
-            ELSE e.amount / POWER(10::numeric, tm.decimals)
-          END
+          SET amount = CASE
+                WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
+                ELSE e.amount
+              END,
+              amount_normalized = CASE
+                WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
+                WHEN tm.decimals <= 0 THEN e.amount
+                ELSE e.amount / POWER(10::numeric, tm.decimals)
+              END
          FROM token_metadata tm
         WHERE tm.token_symbol = e.token_symbol
           AND e.amount IS NOT NULL
-          AND e.amount_normalized IS DISTINCT FROM CASE
-            WHEN tm.decimals <= 0 THEN e.amount
-            ELSE e.amount / POWER(10::numeric, tm.decimals)
-          END
+          AND (
+            e.amount IS DISTINCT FROM CASE
+              WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
+              ELSE e.amount
+            END
+            OR e.amount_normalized IS DISTINCT FROM CASE
+              WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
+              WHEN tm.decimals <= 0 THEN e.amount
+              ELSE e.amount / POWER(10::numeric, tm.decimals)
+            END
+          )
       RETURNING 1
      )
      SELECT COUNT(*)::text AS count FROM updated`,
@@ -506,14 +619,18 @@ export async function syncEdgeAmountsNormalized(): Promise<{
   const fallbackResult = await databasePool.query<{ count: string }>(
     `WITH updated AS (
        UPDATE edges e
-          SET amount_normalized = e.amount
+          SET amount = 1::numeric,
+              amount_normalized = 1::numeric
         WHERE e.amount IS NOT NULL
           AND NOT EXISTS (
             SELECT 1
               FROM token_metadata tm
              WHERE tm.token_symbol = e.token_symbol
           )
-          AND e.amount_normalized IS DISTINCT FROM e.amount
+          AND (
+            e.amount IS DISTINCT FROM 1::numeric
+            OR e.amount_normalized IS DISTINCT FROM 1::numeric
+          )
       RETURNING 1
      )
      SELECT COUNT(*)::text AS count FROM updated`,
@@ -839,17 +956,53 @@ export async function getTransactionsPage(options: {
   const offset = (page - 1) * pageSize;
 
   const countResult = await databasePool.query(
-    `SELECT COUNT(*)::bigint AS total FROM transactions ${whereClause}`,
+    `SELECT COUNT(*)::bigint AS total
+       FROM (
+         SELECT tx_hash,
+                token_symbol,
+                block_height,
+                timestamp,
+                from_address,
+                to_address
+           FROM transactions
+           ${whereClause}
+          GROUP BY tx_hash,
+                   token_symbol,
+                   block_height,
+                   timestamp,
+                   from_address,
+                   to_address
+       ) grouped_transactions`,
     values,
   );
 
   values.push(pageSize, offset);
   const result = await databasePool.query(
-    `SELECT id, tx_hash, event_index, token_symbol, block_height, timestamp,
-            from_address, to_address, amount, amount_normalized, metadata
+    `SELECT MIN(id) AS id,
+            tx_hash,
+            NULL::integer AS event_index,
+            ARRAY_AGG(event_index ORDER BY event_index) AS event_indexes,
+            COUNT(*)::integer AS transfer_count,
+            token_symbol,
+            block_height,
+            timestamp,
+            from_address,
+            to_address,
+            SUM(amount) AS amount,
+            SUM(amount_normalized) AS amount_normalized,
+            CASE
+              WHEN COUNT(*) = 1 THEN (JSONB_AGG(metadata ORDER BY event_index))->0
+              ELSE JSONB_AGG(metadata ORDER BY event_index)
+            END AS metadata
        FROM transactions
        ${whereClause}
-      ORDER BY block_height DESC, tx_hash ASC, event_index ASC
+      GROUP BY tx_hash,
+               token_symbol,
+               block_height,
+               timestamp,
+               from_address,
+               to_address
+      ORDER BY block_height DESC, tx_hash ASC
       LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
   );
