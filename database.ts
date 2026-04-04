@@ -4,6 +4,7 @@ import {
   type PoolConfig,
   type QueryResultRow,
 } from "pg";
+import { PhantasmaTS } from "phantasma-sdk-ts";
 import { apiConfig, databaseConfig } from "./phantasma.config";
 import {
   CHAIN_SYNC_TOKEN,
@@ -37,6 +38,258 @@ function buildPoolConfig(): PoolConfig {
 }
 
 export const databasePool = new Pool(buildPoolConfig());
+
+const RESTORE_BATCH_SIZE = 500;
+
+function readRawEventAmountFromMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): string | null {
+  const rawEvents = metadata?.rawEvents;
+
+  if (!Array.isArray(rawEvents)) {
+    return null;
+  }
+
+  for (const rawEvent of rawEvents) {
+    if (!rawEvent || typeof rawEvent !== "object") {
+      continue;
+    }
+
+    const eventRecord = rawEvent as { data?: unknown; kind?: unknown };
+    const eventData = eventRecord.data;
+
+    if (typeof eventData !== "string" || eventData.length === 0) {
+      continue;
+    }
+
+    try {
+      const decoded = PhantasmaTS.getTokenEventData(eventData);
+      return String(decoded.value);
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+async function restoreFungibleTransactionAmountsFromMetadata(): Promise<number> {
+  const result = await databasePool.query<{
+    id: string;
+    amount: string | null;
+    amount_normalized: string | null;
+    decimals: number;
+    metadata: Record<string, unknown> | null;
+  }>(
+    `SELECT t.id::text AS id,
+            t.amount::text AS amount,
+            t.amount_normalized::text AS amount_normalized,
+            tm.decimals,
+            t.metadata
+       FROM transactions t
+       JOIN token_metadata tm ON tm.token_symbol = t.token_symbol
+      WHERE COALESCE((tm.flags->>'isFungible')::boolean, false) = true
+        AND (
+          t.amount IN (0::numeric, 1::numeric)
+          OR t.amount_normalized IN (0::numeric, 1::numeric)
+        )`,
+  );
+
+  let updatedCount = 0;
+  const pendingUpdates: Array<{
+    id: string;
+    amount: string;
+    amountNormalized: string;
+  }> = [];
+
+  for (const row of result.rows) {
+    const rawAmount = readRawEventAmountFromMetadata(row.metadata);
+
+    if (!rawAmount) {
+      continue;
+    }
+
+    const amountNormalized = normalizeRawAmount(
+      rawAmount,
+      Number(row.decimals),
+    );
+
+    if (
+      row.amount === rawAmount &&
+      row.amount_normalized === amountNormalized
+    ) {
+      continue;
+    }
+
+    pendingUpdates.push({
+      id: row.id,
+      amount: rawAmount,
+      amountNormalized,
+    });
+
+    if (pendingUpdates.length < RESTORE_BATCH_SIZE) {
+      continue;
+    }
+
+    const valuesClause = pendingUpdates
+      .map(
+        (_, index) =>
+          `($${index * 3 + 1}::bigint, $${index * 3 + 2}::numeric, $${index * 3 + 3}::numeric)`,
+      )
+      .join(", ");
+    const queryValues = pendingUpdates.flatMap((item) => [
+      item.id,
+      item.amount,
+      item.amountNormalized,
+    ]);
+    const updateResult = await databasePool.query(
+      `UPDATE transactions AS t
+          SET amount = updates.amount,
+              amount_normalized = updates.amount_normalized
+         FROM (VALUES ${valuesClause}) AS updates(id, amount, amount_normalized)
+        WHERE t.id = updates.id`,
+      queryValues,
+    );
+
+    updatedCount += updateResult.rowCount ?? 0;
+    pendingUpdates.length = 0;
+  }
+
+  if (pendingUpdates.length > 0) {
+    const valuesClause = pendingUpdates
+      .map(
+        (_, index) =>
+          `($${index * 3 + 1}::bigint, $${index * 3 + 2}::numeric, $${index * 3 + 3}::numeric)`,
+      )
+      .join(", ");
+    const queryValues = pendingUpdates.flatMap((item) => [
+      item.id,
+      item.amount,
+      item.amountNormalized,
+    ]);
+    const updateResult = await databasePool.query(
+      `UPDATE transactions AS t
+          SET amount = updates.amount,
+              amount_normalized = updates.amount_normalized
+         FROM (VALUES ${valuesClause}) AS updates(id, amount, amount_normalized)
+        WHERE t.id = updates.id`,
+      queryValues,
+    );
+
+    updatedCount += updateResult.rowCount ?? 0;
+  }
+
+  return updatedCount;
+}
+
+async function restoreFungibleEdgeAmountsFromMetadata(): Promise<number> {
+  const result = await databasePool.query<{
+    id: string;
+    amount: string | null;
+    amount_normalized: string | null;
+    decimals: number;
+    metadata: Record<string, unknown> | null;
+  }>(
+    `SELECT e.id::text AS id,
+            e.amount::text AS amount,
+            e.amount_normalized::text AS amount_normalized,
+            tm.decimals,
+            e.metadata
+       FROM edges e
+       JOIN token_metadata tm ON tm.token_symbol = e.token_symbol
+      WHERE COALESCE((tm.flags->>'isFungible')::boolean, false) = true
+        AND (
+          e.amount IN (0::numeric, 1::numeric)
+          OR e.amount_normalized IN (0::numeric, 1::numeric)
+        )`,
+  );
+
+  let updatedCount = 0;
+  const pendingUpdates: Array<{
+    id: string;
+    amount: string;
+    amountNormalized: string;
+  }> = [];
+
+  for (const row of result.rows) {
+    const rawAmount = readRawEventAmountFromMetadata(row.metadata);
+
+    if (!rawAmount) {
+      continue;
+    }
+
+    const amountNormalized = normalizeRawAmount(
+      rawAmount,
+      Number(row.decimals),
+    );
+
+    if (
+      row.amount === rawAmount &&
+      row.amount_normalized === amountNormalized
+    ) {
+      continue;
+    }
+
+    pendingUpdates.push({
+      id: row.id,
+      amount: rawAmount,
+      amountNormalized,
+    });
+
+    if (pendingUpdates.length < RESTORE_BATCH_SIZE) {
+      continue;
+    }
+
+    const valuesClause = pendingUpdates
+      .map(
+        (_, index) =>
+          `($${index * 3 + 1}::bigint, $${index * 3 + 2}::numeric, $${index * 3 + 3}::numeric)`,
+      )
+      .join(", ");
+    const queryValues = pendingUpdates.flatMap((item) => [
+      item.id,
+      item.amount,
+      item.amountNormalized,
+    ]);
+    const updateResult = await databasePool.query(
+      `UPDATE edges AS e
+          SET amount = updates.amount,
+              amount_normalized = updates.amount_normalized
+         FROM (VALUES ${valuesClause}) AS updates(id, amount, amount_normalized)
+        WHERE e.id = updates.id`,
+      queryValues,
+    );
+
+    updatedCount += updateResult.rowCount ?? 0;
+    pendingUpdates.length = 0;
+  }
+
+  if (pendingUpdates.length > 0) {
+    const valuesClause = pendingUpdates
+      .map(
+        (_, index) =>
+          `($${index * 3 + 1}::bigint, $${index * 3 + 2}::numeric, $${index * 3 + 3}::numeric)`,
+      )
+      .join(", ");
+    const queryValues = pendingUpdates.flatMap((item) => [
+      item.id,
+      item.amount,
+      item.amountNormalized,
+    ]);
+    const updateResult = await databasePool.query(
+      `UPDATE edges AS e
+          SET amount = updates.amount,
+              amount_normalized = updates.amount_normalized
+         FROM (VALUES ${valuesClause}) AS updates(id, amount, amount_normalized)
+        WHERE e.id = updates.id`,
+      queryValues,
+    );
+
+    updatedCount += updateResult.rowCount ?? 0;
+  }
+
+  return updatedCount;
+}
 
 function mapSyncStateRow(row: QueryResultRow): SyncStateRecord {
   return {
@@ -94,30 +347,11 @@ function isTokenFungible(
 
   const directFlag = flags.isFungible;
 
-  if (typeof directFlag === "boolean") {
-    return directFlag;
-  }
-
-  if (typeof directFlag === "string") {
-    return directFlag.toLowerCase() === "true";
-  }
-
-  const flagValues = Object.values(flags)
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.toLowerCase());
-
-  if (flagValues.includes("fungible")) {
-    return true;
-  }
-
-  if (
-    flagValues.includes("nonfungible") ||
-    flagValues.includes("non-fungible")
-  ) {
+  if (typeof directFlag !== "boolean") {
     return false;
   }
 
-  return false;
+  return directFlag;
 }
 
 function resolveStoredTransferAmounts(
@@ -377,6 +611,9 @@ export async function syncTransactionAmountsNormalized(): Promise<{
   updatedFallback: number;
   totalUpdated: number;
 }> {
+  const restoredFromMetadata =
+    await restoreFungibleTransactionAmountsFromMetadata();
+
   const usingMetadataResult = await databasePool.query<{ count: string }>(
     `WITH updated AS (
        UPDATE transactions t
@@ -432,9 +669,9 @@ export async function syncTransactionAmountsNormalized(): Promise<{
   const updatedFallback = Number(fallbackResult.rows[0]?.count ?? 0);
 
   return {
-    updatedUsingMetadata,
+    updatedUsingMetadata: updatedUsingMetadata + restoredFromMetadata,
     updatedFallback,
-    totalUpdated: updatedUsingMetadata + updatedFallback,
+    totalUpdated: updatedUsingMetadata + restoredFromMetadata + updatedFallback,
   };
 }
 
@@ -585,6 +822,8 @@ export async function syncEdgeAmountsNormalized(): Promise<{
   updatedFallback: number;
   totalUpdated: number;
 }> {
+  const restoredFromMetadata = await restoreFungibleEdgeAmountsFromMetadata();
+
   const usingMetadataResult = await databasePool.query<{ count: string }>(
     `WITH updated AS (
        UPDATE edges e
@@ -640,9 +879,9 @@ export async function syncEdgeAmountsNormalized(): Promise<{
   const updatedFallback = Number(fallbackResult.rows[0]?.count ?? 0);
 
   return {
-    updatedUsingMetadata,
+    updatedUsingMetadata: updatedUsingMetadata + restoredFromMetadata,
     updatedFallback,
-    totalUpdated: updatedUsingMetadata + updatedFallback,
+    totalUpdated: updatedUsingMetadata + restoredFromMetadata + updatedFallback,
   };
 }
 
