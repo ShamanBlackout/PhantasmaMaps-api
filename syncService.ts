@@ -242,8 +242,8 @@ export async function processBlockHeight(blockHeight: number): Promise<{
     parsedBlock.tokenSymbols.length > 0
       ? await fetchTokenMetadataFromRpc(parsedBlock.tokenSymbols)
       : [];
-  const tokenDecimalsBySymbol = new Map<string, number>(
-    tokenMetadata.map((item) => [item.tokenSymbol, item.decimals]),
+  const tokenMetadataBySymbol = new Map(
+    tokenMetadata.map((item) => [item.tokenSymbol, item]),
   );
 
   await withDatabaseTransaction(async (client) => {
@@ -255,15 +255,15 @@ export async function processBlockHeight(blockHeight: number): Promise<{
       await upsertTransfers(
         client,
         parsedBlock.transfers,
-        tokenDecimalsBySymbol,
+        tokenMetadataBySymbol,
       );
       await upsertNodes(
         client,
         parsedBlock.transfers,
         nodeBalances,
-        tokenDecimalsBySymbol,
+        new Map(tokenMetadata.map((item) => [item.tokenSymbol, item.decimals])),
       );
-      await upsertEdges(client, parsedBlock.transfers, tokenDecimalsBySymbol);
+      await upsertEdges(client, parsedBlock.transfers, tokenMetadataBySymbol);
     }
 
     await updateSyncStateForBlock(
