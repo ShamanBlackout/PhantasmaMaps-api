@@ -89,6 +89,21 @@ function getRawMaxSupply(token: Record<string, unknown>): string | null {
   );
 }
 
+function readTokenFlagSet(token: Record<string, unknown>): Set<string> {
+  const rawFlags = readOptionalString(token.flags);
+
+  if (!rawFlags) {
+    return new Set<string>();
+  }
+
+  return new Set(
+    rawFlags
+      .split(",")
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 function mapRpcTokenToUpsert(
   tokenSymbol: string,
   tokenRaw: unknown,
@@ -99,6 +114,7 @@ function mapRpcTokenToUpsert(
       : {};
 
   const decimals = Math.max(0, Math.floor(readNumber(token.decimals, 0)));
+  const tokenFlags = readTokenFlagSet(token);
   const currentSupplyRaw = getRawSupply(token);
   const maxSupplyRaw = getRawMaxSupply(token);
 
@@ -112,13 +128,10 @@ function mapRpcTokenToUpsert(
     maxSupplyNormalized:
       maxSupplyRaw === null ? null : normalizeRawAmount(maxSupplyRaw, decimals),
     flags: {
-      isBurnable:
-        typeof token.isBurnable === "boolean" ? token.isBurnable : null,
-      isFungible:
-        typeof token.isFungible === "boolean" ? token.isFungible : null,
-      isFinite: typeof token.isFinite === "boolean" ? token.isFinite : null,
-      isTransferable:
-        typeof token.isTransferable === "boolean" ? token.isTransferable : null,
+      isBurnable: tokenFlags.has("burnable"),
+      isFungible: tokenFlags.has("fungible"),
+      isFinite: tokenFlags.has("finite"),
+      isTransferable: tokenFlags.has("transferable"),
     },
     metadata: token,
   };
