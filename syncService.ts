@@ -1,8 +1,18 @@
 import type { Block } from "phantasma-sdk-ts";
-import { syncConfig } from "./phantasma.config";
+import { randomUUID } from "node:crypto";
+import { rpcConfig, syncConfig } from "./phantasma.config";
 import {
+  advanceChainSyncHeightFromClaims,
+  claimNextBlockHeight,
+  completeBlockSyncClaim,
+  failBlockSyncClaim,
+  getBlockSyncClaimWaitState,
+  getExhaustedBlockSyncClaims,
   getChainSyncHeight,
-  updateSyncStateForBlock,
+  resetStaleBlockSyncClaims,
+  seedBlockSyncClaims,
+  updateChainSyncHeight,
+  updateTokenSyncStateForBlock,
   upsertEdges,
   upsertNodes,
   upsertTokenMetadata,
@@ -14,6 +24,46 @@ import { extractTransfersFromBlock } from "./transferParser";
 import type { TokenMetadataUpsertInput } from "./phantasma.types";
 
 const rpcClient = createPhantasmaRpcClient();
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+async function mapWithConcurrency<T, TResult>(
+  items: T[],
+  requestedConcurrency: number,
+  worker: (item: T, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const results = new Array<TResult>(items.length);
+  const concurrency = Math.min(
+    Math.max(1, Math.floor(requestedConcurrency)),
+    items.length,
+  );
+  let nextIndex = 0;
+
+  await Promise.all(
+    Array.from({ length: concurrency }, async () => {
+      while (true) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+
+        if (currentIndex >= items.length) {
+          return;
+        }
+
+        results[currentIndex] = await worker(items[currentIndex], currentIndex);
+      }
+    }),
+  );
+
+  return results;
+}
 
 function readNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
@@ -209,13 +259,26 @@ async function fetchNodeBalancesFromRpc(
 
   const balancesByNodeKey = new Map<string, string>();
 
-  for (const [address, tokenSet] of tokenSetByAddress.entries()) {
-    const account = await rpcClient.getAccount(address);
-    const balanceBySymbol = readBalancesFromAccount(account);
+  const balanceResults = await mapWithConcurrency(
+    [...tokenSetByAddress.entries()],
+    rpcConfig.metadataMaxConcurrent,
+    async ([address, tokenSet]) => {
+      const account = await rpcClient.getAccount(address);
+      return {
+        address,
+        tokenSet,
+        balanceBySymbol: readBalancesFromAccount(account),
+      };
+    },
+  );
 
-    for (const tokenSymbol of tokenSet) {
-      const key = `${tokenSymbol}:${address}`;
-      balancesByNodeKey.set(key, balanceBySymbol.get(tokenSymbol) ?? "0");
+  for (const result of balanceResults) {
+    for (const tokenSymbol of result.tokenSet) {
+      const key = `${tokenSymbol}:${result.address}`;
+      balancesByNodeKey.set(
+        key,
+        result.balanceBySymbol.get(tokenSymbol) ?? "0",
+      );
     }
   }
 
@@ -226,17 +289,34 @@ async function fetchTokenMetadataFromRpc(
   tokenSymbols: string[],
 ): Promise<TokenMetadataUpsertInput[]> {
   const uniqueSymbols = [...new Set(tokenSymbols.filter(Boolean))];
-  const items: TokenMetadataUpsertInput[] = [];
 
-  for (const tokenSymbol of uniqueSymbols) {
-    const token = await rpcClient.getToken(tokenSymbol);
-    items.push(mapRpcTokenToUpsert(tokenSymbol, token));
-  }
-
-  return items;
+  return mapWithConcurrency(
+    uniqueSymbols,
+    rpcConfig.metadataMaxConcurrent,
+    async (tokenSymbol) => {
+      const token = await rpcClient.getToken(tokenSymbol);
+      return mapRpcTokenToUpsert(tokenSymbol, token);
+    },
+  );
 }
 
 export async function processBlockHeight(blockHeight: number): Promise<{
+  blockHeight: number;
+  transferCount: number;
+  tokenSymbols: string[];
+}>;
+export async function processBlockHeight(
+  blockHeight: number,
+  options: { updateChainSyncState?: boolean },
+): Promise<{
+  blockHeight: number;
+  transferCount: number;
+  tokenSymbols: string[];
+}>;
+export async function processBlockHeight(
+  blockHeight: number,
+  options?: { updateChainSyncState?: boolean },
+): Promise<{
   blockHeight: number;
   transferCount: number;
   tokenSymbols: string[];
@@ -279,12 +359,16 @@ export async function processBlockHeight(blockHeight: number): Promise<{
       await upsertEdges(client, parsedBlock.transfers, tokenMetadataBySymbol);
     }
 
-    await updateSyncStateForBlock(
+    await updateTokenSyncStateForBlock(
       client,
       parsedBlock.blockHeight,
       parsedBlock.tokenSymbols,
     );
   });
+
+  if (options?.updateChainSyncState !== false) {
+    await updateChainSyncHeight(parsedBlock.blockHeight);
+  }
 
   return {
     blockHeight: parsedBlock.blockHeight,
@@ -293,36 +377,202 @@ export async function processBlockHeight(blockHeight: number): Promise<{
   };
 }
 
-export async function runBackfillSync(): Promise<void> {
-  const currentHeight = await rpcClient.getBlockHeight();
+async function runBlockRange(
+  startHeight: number,
+  endHeight: number,
+): Promise<void> {
+  if (startHeight > endHeight) {
+    return;
+  }
 
-  console.log(
-    `Starting backfill from block ${syncConfig.initialBackfillStartBlock} to ${currentHeight}`,
+  const totalBlocks = endHeight - startHeight + 1;
+  const workerCount = Math.min(
+    Math.max(1, syncConfig.workerCount),
+    totalBlocks,
   );
 
-  for (
-    let blockHeight = syncConfig.initialBackfillStartBlock;
-    blockHeight <= currentHeight;
-    blockHeight++
-  ) {
-    const result = await processBlockHeight(blockHeight);
+  await resetStaleBlockSyncClaims(syncConfig.claimStaleAfterSeconds);
+  await seedBlockSyncClaims(startHeight, endHeight);
 
-    if (blockHeight % syncConfig.blockLogInterval === 0) {
-      console.log(
-        `Processed block ${result.blockHeight} with ${result.transferCount} transfer(s) across ${result.tokenSymbols.length} token(s)`,
-      );
-    }
+  const exhaustedClaims = await getExhaustedBlockSyncClaims(
+    startHeight,
+    endHeight,
+    syncConfig.claimMaxAttempts,
+    5,
+  );
+
+  if (exhaustedClaims.length > 0) {
+    const summary = exhaustedClaims
+      .map(
+        (item) =>
+          `${item.blockHeight} (attempts=${item.attemptCount}${item.error ? `, error=${item.error}` : ""})`,
+      )
+      .join(", ");
+
+    throw new Error(
+      `Cannot continue sync because block claims exceeded retry limit (${syncConfig.claimMaxAttempts}): ${summary}`,
+    );
   }
+
+  let failure: unknown = null;
+  const activeBlocks = new Map<number, number>();
+  let commitQueue = Promise.resolve<number | null>(null);
+  const commitFallbackHeight = startHeight - 1;
+
+  const workers = Array.from({ length: workerCount }, (_, workerIndex) => {
+    const workerId = workerIndex + 1;
+    const workerClaimId = `${process.pid}:${workerId}:${randomUUID()}`;
+
+    return (async () => {
+      while (failure === null) {
+        const blockHeight = await claimNextBlockHeight(
+          workerClaimId,
+          syncConfig.claimMaxAttempts,
+          syncConfig.claimRetryBaseDelaySeconds,
+          syncConfig.claimRetryMaxDelaySeconds,
+        );
+
+        if (blockHeight === null) {
+          const exhaustedDuringRun = await getExhaustedBlockSyncClaims(
+            startHeight,
+            endHeight,
+            syncConfig.claimMaxAttempts,
+            5,
+          );
+
+          if (exhaustedDuringRun.length > 0) {
+            const summary = exhaustedDuringRun
+              .map(
+                (item) =>
+                  `${item.blockHeight} (attempts=${item.attemptCount}${item.error ? `, error=${item.error}` : ""})`,
+              )
+              .join(", ");
+
+            failure = new Error(
+              `Cannot continue sync because block claims exceeded retry limit (${syncConfig.claimMaxAttempts}): ${summary}`,
+            );
+            return;
+          }
+
+          const waitState = await getBlockSyncClaimWaitState(
+            startHeight,
+            endHeight,
+            syncConfig.claimMaxAttempts,
+            syncConfig.claimRetryBaseDelaySeconds,
+            syncConfig.claimRetryMaxDelaySeconds,
+          );
+
+          if (
+            waitState.pendingCount === 0 &&
+            waitState.claimedCount === 0 &&
+            waitState.retryBlockedCount === 0
+          ) {
+            return;
+          }
+
+          const waitMs = waitState.nextRetryAt
+            ? Math.max(
+                250,
+                Math.min(5000, waitState.nextRetryAt.getTime() - Date.now()),
+              )
+            : 1000;
+
+          await sleep(waitMs);
+          continue;
+        }
+
+        activeBlocks.set(workerId, blockHeight);
+
+        try {
+          const result = await processBlockHeight(blockHeight, {
+            updateChainSyncState: false,
+          });
+
+          const completed = await completeBlockSyncClaim(
+            workerClaimId,
+            result.blockHeight,
+          );
+
+          if (!completed) {
+            throw new Error(
+              `Failed to mark block ${result.blockHeight} as completed for worker ${workerClaimId}`,
+            );
+          }
+
+          activeBlocks.delete(workerId);
+
+          commitQueue = commitQueue.then(async () => {
+            const committedThrough =
+              await advanceChainSyncHeightFromClaims(commitFallbackHeight);
+            const effectiveCommitHeight =
+              committedThrough ??
+              (await getChainSyncHeight()) ??
+              commitFallbackHeight;
+
+            if (result.blockHeight % syncConfig.blockLogInterval === 0) {
+              const activeSummary = [...activeBlocks.entries()]
+                .sort((left, right) => left[0] - right[0])
+                .map(([id, activeBlockHeight]) => `w${id}:${activeBlockHeight}`)
+                .join(", ");
+
+              console.log(
+                `Processed block ${result.blockHeight} with ${result.transferCount} transfer(s) across ${result.tokenSymbols.length} token(s); committedThrough=${effectiveCommitHeight}; active=[${activeSummary}]`,
+              );
+            }
+
+            return effectiveCommitHeight;
+          });
+        } catch (error: unknown) {
+          activeBlocks.delete(workerId);
+          await failBlockSyncClaim(
+            workerClaimId,
+            blockHeight,
+            error instanceof Error ? error.message : String(error),
+          );
+          failure = error;
+          return;
+        }
+      }
+    })();
+  });
+
+  await Promise.all(workers);
+  await commitQueue;
+
+  if (failure !== null) {
+    throw failure;
+  }
+}
+
+async function getResumeStartHeight(): Promise<number> {
+  const lastSyncedHeight = await getChainSyncHeight();
+
+  if (lastSyncedHeight !== null) {
+    return lastSyncedHeight + 1;
+  }
+
+  return syncConfig.initialBackfillStartBlock;
+}
+
+export async function runBackfillSync(): Promise<void> {
+  const currentHeight = await rpcClient.getBlockHeight();
+  const startHeight = await getResumeStartHeight();
+
+  if (startHeight > currentHeight) {
+    console.log(`No new blocks to process. Current height: ${currentHeight}`);
+    return;
+  }
+
+  console.log(
+    `Starting backfill from block ${startHeight} to ${currentHeight}`,
+  );
+
+  await runBlockRange(startHeight, currentHeight);
 }
 
 export async function runIncrementalSync(): Promise<void> {
   const currentHeight = await rpcClient.getBlockHeight();
-  const lastSyncedHeight =
-    (await getChainSyncHeight()) ?? syncConfig.initialBackfillStartBlock - 1;
-  const startHeight = Math.max(
-    syncConfig.initialBackfillStartBlock,
-    lastSyncedHeight + 1,
-  );
+  const startHeight = await getResumeStartHeight();
 
   if (startHeight > currentHeight) {
     console.log(`No new blocks to process. Current height: ${currentHeight}`);
@@ -333,17 +583,5 @@ export async function runIncrementalSync(): Promise<void> {
     `Starting incremental sync from block ${startHeight} to ${currentHeight}`,
   );
 
-  for (
-    let blockHeight = startHeight;
-    blockHeight <= currentHeight;
-    blockHeight++
-  ) {
-    const result = await processBlockHeight(blockHeight);
-
-    if (blockHeight % syncConfig.blockLogInterval === 0) {
-      console.log(
-        `Processed block ${result.blockHeight} with ${result.transferCount} transfer(s) across ${result.tokenSymbols.length} token(s)`,
-      );
-    }
-  }
+  await runBlockRange(startHeight, currentHeight);
 }

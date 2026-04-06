@@ -48,15 +48,31 @@ export const rpcConfig = {
     "PHANTASMA_BLOCK_REQUEST_INTERVAL_MS",
     1000,
   ),
+  blockMaxConcurrent: readNumber("PHANTASMA_RPC_BLOCK_MAX_CONCURRENT", 4),
   metadataRequestIntervalMs: readNumber(
     "PHANTASMA_METADATA_REQUEST_INTERVAL_MS",
     500,
   ),
+  metadataMaxConcurrent: readNumber("PHANTASMA_RPC_METADATA_MAX_CONCURRENT", 8),
 } as const;
 
 export const syncConfig = {
   initialBackfillStartBlock: 6525260,
   blockLogInterval: readNumber("PHANTASMA_SYNC_BLOCK_LOG_INTERVAL", 100),
+  workerCount: readNumber("PHANTASMA_SYNC_WORKER_COUNT", 4),
+  claimMaxAttempts: readNumber("PHANTASMA_SYNC_CLAIM_MAX_ATTEMPTS", 3),
+  claimRetryBaseDelaySeconds: readNumber(
+    "PHANTASMA_SYNC_CLAIM_RETRY_BASE_DELAY_SECONDS",
+    30,
+  ),
+  claimRetryMaxDelaySeconds: readNumber(
+    "PHANTASMA_SYNC_CLAIM_RETRY_MAX_DELAY_SECONDS",
+    900,
+  ),
+  claimStaleAfterSeconds: readNumber(
+    "PHANTASMA_SYNC_CLAIM_STALE_AFTER_SECONDS",
+    1800,
+  ),
   captureRawEvents: readBoolean("PHANTASMA_CAPTURE_RAW_EVENTS", true),
 } as const;
 

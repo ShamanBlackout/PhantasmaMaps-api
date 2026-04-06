@@ -16,7 +16,8 @@
     "find-first-transfer": "tsx findFirstTransferBlock.ts",
     "check": "tsc --noEmit",
     "test:rpc": "tsx connectPhantasma.ts",
-    "test:db-snapshot": "tsx testDatabaseInserts.ts"
+    "test:db-snapshot": "tsx testDatabaseInserts.ts",
+    "cleanup:claims": "tsx cleanupBlockClaims.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
