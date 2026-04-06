@@ -55,15 +55,32 @@ async function withTimeout<T>(
 
 class RequestScheduler {
   private readonly minIntervalMs: number;
+  private readonly maxConcurrent: number;
   private lastStartAt = 0;
-  private queue: Promise<void> = Promise.resolve();
+  private activeCount = 0;
+  private readonly waiting: Array<() => void> = [];
 
-  constructor(minIntervalMs: number) {
+  constructor(minIntervalMs: number, maxConcurrent: number) {
     this.minIntervalMs = minIntervalMs;
+    this.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
   }
 
   async schedule<T>(task: () => Promise<T>): Promise<T> {
-    const run = async (): Promise<T> => {
+    await new Promise<void>((resolve) => {
+      const attemptStart = () => {
+        if (this.activeCount < this.maxConcurrent) {
+          this.activeCount += 1;
+          resolve();
+          return;
+        }
+
+        this.waiting.push(attemptStart);
+      };
+
+      attemptStart();
+    });
+
+    try {
       // Rate limiting disabled for testing
       // const waitMs = Math.max(
       //   0,
@@ -75,16 +92,15 @@ class RequestScheduler {
       // }
 
       this.lastStartAt = Date.now();
-      return task();
-    };
+      return await task();
+    } finally {
+      this.activeCount = Math.max(0, this.activeCount - 1);
+      const next = this.waiting.shift();
 
-    const result = this.queue.then(run, run);
-    this.queue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-
-    return result;
+      if (next) {
+        next();
+      }
+    }
   }
 }
 
@@ -92,9 +108,11 @@ export class PhantasmaRpcClient {
   private readonly apiCache = new Map<string, PhantasmaAPI>();
   private readonly blockScheduler = new RequestScheduler(
     rpcConfig.blockRequestIntervalMs,
+    rpcConfig.blockMaxConcurrent,
   );
   private readonly metadataScheduler = new RequestScheduler(
     rpcConfig.metadataRequestIntervalMs,
+    rpcConfig.metadataMaxConcurrent,
   );
   private activeRpcUrl: string | null = null;
 

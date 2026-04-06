@@ -5,6 +5,7 @@ import {
   closeDatabasePool,
   getAddressSubgraph,
   getAvailableTokens,
+  getBlockSyncClaimsView,
   getFullTokenGraph,
   getSyncStates,
   getTokenMetadata,
@@ -20,6 +21,17 @@ function readPositiveInt(value: string | undefined, fallback: number): number {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readStringList(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 const app = express();
@@ -53,6 +65,30 @@ app.get("/sync-status", async (_request: Request, response: Response) => {
   try {
     const syncStates = await getSyncStates();
     response.json({ items: syncStates });
+  } catch (error: unknown) {
+    response
+      .status(500)
+      .json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+app.get("/sync-claims", async (request: Request, response: Response) => {
+  try {
+    const limit = readPositiveInt(String(request.query.limit ?? ""), 100);
+    const result = await getBlockSyncClaimsView({
+      statuses: readStringList(
+        request.query.status ? String(request.query.status) : undefined,
+      ),
+      fromBlock: request.query.fromBlock
+        ? readPositiveInt(String(request.query.fromBlock), 0)
+        : undefined,
+      toBlock: request.query.toBlock
+        ? readPositiveInt(String(request.query.toBlock), 0)
+        : undefined,
+      limit,
+    });
+
+    response.json(result);
   } catch (error: unknown) {
     response
       .status(500)
