@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from "express";
 import cors from "cors";
 import { apiConfig } from "./phantasma.config";
+import { createPhantasmaRpcClient } from "./rpcClient";
 import {
   closeDatabasePool,
   getAddressSubgraph,
@@ -34,6 +35,8 @@ function readStringList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+const rpcClient = createPhantasmaRpcClient();
+
 const app = express();
 
 const allowedOrigins = String(process.env.PHANTASMA_API_CORS_ORIGINS ?? "")
@@ -63,8 +66,22 @@ app.get("/health", async (_request: Request, response: Response) => {
 
 app.get("/sync-status", async (_request: Request, response: Response) => {
   try {
-    const syncStates = await getSyncStates();
-    response.json({ items: syncStates });
+    const [syncStatesResult, chainHeadResult] = await Promise.allSettled([
+      getSyncStates(),
+      rpcClient.getBlockHeight(),
+    ]);
+
+    if (syncStatesResult.status !== "fulfilled") {
+      throw syncStatesResult.reason;
+    }
+
+    response.json({
+      items: syncStatesResult.value,
+      chainHeadBlockHeight:
+        chainHeadResult.status === "fulfilled"
+          ? Number(chainHeadResult.value)
+          : null,
+    });
   } catch (error: unknown) {
     response
       .status(500)

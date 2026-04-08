@@ -58,6 +58,7 @@ class RequestScheduler {
   private readonly maxConcurrent: number;
   private lastStartAt = 0;
   private activeCount = 0;
+  private startGate = Promise.resolve();
   private readonly waiting: Array<() => void> = [];
 
   constructor(minIntervalMs: number, maxConcurrent: number) {
@@ -81,17 +82,30 @@ class RequestScheduler {
     });
 
     try {
-      // Rate limiting disabled for testing
-      // const waitMs = Math.max(
-      //   0,
-      //   this.lastStartAt + this.minIntervalMs - Date.now(),
-      // );
-      //
-      // if (waitMs > 0) {
-      //   await sleep(waitMs);
-      // }
+      let releaseStartGate!: () => void;
+      const nextStartGate = new Promise<void>((resolve) => {
+        releaseStartGate = resolve;
+      });
+      const previousStartGate = this.startGate;
+      this.startGate = nextStartGate;
 
-      this.lastStartAt = Date.now();
+      await previousStartGate;
+
+      try {
+        const waitMs = Math.max(
+          0,
+          this.lastStartAt + this.minIntervalMs - Date.now(),
+        );
+
+        if (waitMs > 0) {
+          await sleep(waitMs);
+        }
+
+        this.lastStartAt = Date.now();
+      } finally {
+        releaseStartGate();
+      }
+
       return await task();
     } finally {
       this.activeCount = Math.max(0, this.activeCount - 1);
