@@ -1,5 +1,15 @@
 import { databasePool } from "./database";
-import { readNumber } from "./phantasma.config";
+
+function readNumber(name: string, fallback: number): number {
+  const rawValue = process.env[name];
+
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 // Reads from env: PHANTASMA_CLAIM_CLEANUP_DAYS (default 7)
 const days = readNumber("PHANTASMA_CLAIM_CLEANUP_DAYS", 7);

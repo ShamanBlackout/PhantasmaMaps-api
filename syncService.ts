@@ -433,6 +433,14 @@ async function runBlockRange(
         );
 
         if (blockHeight === null) {
+          const resetCount = await resetStaleBlockSyncClaims(
+            syncConfig.claimStaleAfterSeconds,
+          );
+
+          if (resetCount > 0) {
+            continue;
+          }
+
           const exhaustedDuringRun = await getExhaustedBlockSyncClaims(
             startHeight,
             endHeight,

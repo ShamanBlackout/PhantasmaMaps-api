@@ -1,3 +1,5 @@
+process.loadEnvFile?.();
+
 function readNumber(name: string, fallback: number): number {
   const rawValue = process.env[name];
 
