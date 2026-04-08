@@ -1589,7 +1589,7 @@ export async function getAddressSubgraph(
   const edgesResult = await databasePool.query(
     `WITH RECURSIVE walk AS (
        SELECT $2::text AS address, 0 AS depth
-       UNION
+       UNION ALL
        SELECT CASE
                 WHEN e.from_address = walk.address THEN e.to_address
                 ELSE e.from_address
@@ -1601,7 +1601,12 @@ export async function getAddressSubgraph(
           AND (e.from_address = walk.address OR e.to_address = walk.address)
         WHERE walk.depth < $3
      ),
-     limited_edges AS (
+     address_depths AS (
+       SELECT address, MIN(depth) AS depth
+         FROM walk
+        GROUP BY address
+     ),
+     ranked_edges AS (
        SELECT DISTINCT ON (e.tx_hash, e.event_index)
               e.id,
               e.token_symbol,
@@ -1611,15 +1616,35 @@ export async function getAddressSubgraph(
               e.amount_normalized,
               e.tx_hash,
               e.event_index,
-              e.metadata
+              e.metadata,
+              LEAST(from_depth.depth, to_depth.depth) AS edge_depth
          FROM edges e
-         JOIN walk
-           ON e.token_symbol = $1
-          AND (e.from_address = walk.address OR e.to_address = walk.address)
-        ORDER BY e.tx_hash, e.event_index, e.id
+         JOIN address_depths from_depth
+           ON from_depth.address = e.from_address
+         JOIN address_depths to_depth
+           ON to_depth.address = e.to_address
+        WHERE e.token_symbol = $1
+        ORDER BY e.tx_hash,
+                 e.event_index,
+                 LEAST(from_depth.depth, to_depth.depth),
+                 e.id
+     ),
+     limited_edges AS (
+       SELECT id,
+              token_symbol,
+              from_address,
+              to_address,
+              amount,
+              amount_normalized,
+              tx_hash,
+              event_index,
+              metadata
+         FROM ranked_edges
+        ORDER BY edge_depth ASC, id ASC
         LIMIT $4
      )
-     SELECT * FROM limited_edges`,
+     SELECT * FROM limited_edges
+     ORDER BY id ASC`,
     [tokenSymbol, rootAddress, depth, edgeLimit],
   );
 
