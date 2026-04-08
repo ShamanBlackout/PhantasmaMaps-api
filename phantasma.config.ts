@@ -80,7 +80,10 @@ export const apiConfig = {
   port: readNumber("PHANTASMA_API_PORT", 3000),
   graphDefaultDepth: 1,
   graphHardMaxDepth: 2,
-  graphMaxEdgesPerRequest: 500,
+  graphMaxEdgesPerRequest: readNumber(
+    "PHANTASMA_GRAPH_MAX_EDGES_PER_REQUEST",
+    1200,
+  ),
   tokenGraphMaxEdges: readNumber("PHANTASMA_TOKEN_GRAPH_MAX_EDGES", 5000),
   transactionPageSizeDefault: readNumber("PHANTASMA_TX_PAGE_SIZE", 50),
   transactionPageSizeMax: readNumber("PHANTASMA_TX_PAGE_SIZE_MAX", 250),
