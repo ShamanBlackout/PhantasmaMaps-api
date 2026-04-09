@@ -11,8 +11,8 @@ function readNumber(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-// Reads from env: PHANTASMA_CLAIM_CLEANUP_DAYS (default 7)
-const days = readNumber("PHANTASMA_CLAIM_CLEANUP_DAYS", 7);
+// Reads from env: PHANTASMA_CLAIM_CLEANUP_DAYS (default 2)
+const days = readNumber("PHANTASMA_CLAIM_CLEANUP_DAYS", 2);
 
 async function cleanupCompletedClaims() {
   const result = await databasePool.query(
