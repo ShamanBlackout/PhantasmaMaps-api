@@ -12,6 +12,7 @@ import {
   resetStaleBlockSyncClaims,
   seedBlockSyncClaims,
   updateChainSyncHeight,
+  updateTrackedNodeBalances,
   updateTokenSyncStateForBlock,
   upsertEdges,
   upsertNodes,
@@ -274,6 +275,10 @@ async function fetchNodeBalancesFromRpc(
 
   for (const result of balanceResults) {
     for (const tokenSymbol of result.tokenSet) {
+      if (!result.balanceBySymbol.has(tokenSymbol)) {
+        continue;
+      }
+
       const key = `${tokenSymbol}:${result.address}`;
       balancesByNodeKey.set(
         key,
@@ -283,6 +288,86 @@ async function fetchNodeBalancesFromRpc(
   }
 
   return balancesByNodeKey;
+}
+
+function collectTouchedNodePairs(
+  transfers: Array<{
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+  }>,
+): Array<{ address: string; tokenSymbol: string }> {
+  const touchedPairs = new Map<
+    string,
+    { address: string; tokenSymbol: string }
+  >();
+
+  for (const transfer of transfers) {
+    for (const address of [transfer.fromAddress, transfer.toAddress]) {
+      const key = `${transfer.tokenSymbol}:${address}`;
+
+      if (!touchedPairs.has(key)) {
+        touchedPairs.set(key, {
+          address,
+          tokenSymbol: transfer.tokenSymbol,
+        });
+      }
+    }
+  }
+
+  return [...touchedPairs.values()];
+}
+
+async function refreshNodeBalancesFromRpc(
+  nodePairs: Array<{ address: string; tokenSymbol: string }>,
+): Promise<{ addressCount: number; updatedCount: number }> {
+  if (nodePairs.length === 0) {
+    return {
+      addressCount: 0,
+      updatedCount: 0,
+    };
+  }
+
+  const tokenSetByAddress = new Map<string, Set<string>>();
+
+  for (const nodePair of nodePairs) {
+    const tokenSet =
+      tokenSetByAddress.get(nodePair.address) ?? new Set<string>();
+    tokenSet.add(nodePair.tokenSymbol);
+    tokenSetByAddress.set(nodePair.address, tokenSet);
+  }
+
+  let updatedCount = 0;
+
+  const balanceResults = await mapWithConcurrency(
+    [...tokenSetByAddress.entries()],
+    rpcConfig.metadataMaxConcurrent,
+    async ([address, tokenSet]) => {
+      const account = await rpcClient.getAccount(address);
+      return {
+        address,
+        tokenSet,
+        balanceBySymbol: readBalancesFromAccount(account),
+      };
+    },
+  );
+
+  for (const result of balanceResults) {
+    const updates = [...result.tokenSet].map((tokenSymbol) => ({
+      address: result.address,
+      tokenSymbol,
+      balance: result.balanceBySymbol.get(tokenSymbol) ?? "0",
+    }));
+
+    updatedCount += await withDatabaseTransaction((client) => {
+      return updateTrackedNodeBalances(client, updates);
+    });
+  }
+
+  return {
+    addressCount: tokenSetByAddress.size,
+    updatedCount,
+  };
 }
 
 async function fetchTokenMetadataFromRpc(
@@ -304,6 +389,7 @@ export async function processBlockHeight(blockHeight: number): Promise<{
   blockHeight: number;
   transferCount: number;
   tokenSymbols: string[];
+  touchedNodePairs: Array<{ address: string; tokenSymbol: string }>;
 }>;
 export async function processBlockHeight(
   blockHeight: number,
@@ -312,6 +398,7 @@ export async function processBlockHeight(
   blockHeight: number;
   transferCount: number;
   tokenSymbols: string[];
+  touchedNodePairs: Array<{ address: string; tokenSymbol: string }>;
 }>;
 export async function processBlockHeight(
   blockHeight: number,
@@ -320,6 +407,7 @@ export async function processBlockHeight(
   blockHeight: number;
   transferCount: number;
   tokenSymbols: string[];
+  touchedNodePairs: Array<{ address: string; tokenSymbol: string }>;
 }> {
   if (blockHeight < 1) {
     throw new Error(`Invalid block height ${blockHeight}: blocks start at 1`);
@@ -327,6 +415,7 @@ export async function processBlockHeight(
 
   const block = (await rpcClient.getBlockByHeight(blockHeight)) as Block;
   const parsedBlock = extractTransfersFromBlock(block, blockHeight);
+  const touchedNodePairs = collectTouchedNodePairs(parsedBlock.transfers);
   const nodeBalances =
     parsedBlock.transfers.length > 0
       ? await fetchNodeBalancesFromRpc(parsedBlock.transfers)
@@ -374,6 +463,7 @@ export async function processBlockHeight(
     blockHeight: parsedBlock.blockHeight,
     transferCount: parsedBlock.transferCount,
     tokenSymbols: parsedBlock.tokenSymbols,
+    touchedNodePairs,
   };
 }
 
@@ -418,6 +508,10 @@ async function runBlockRange(
   const activeBlocks = new Map<number, number>();
   let commitQueue = Promise.resolve<number | null>(null);
   const commitFallbackHeight = startHeight - 1;
+  const touchedNodePairs = new Map<
+    string,
+    { address: string; tokenSymbol: string }
+  >();
 
   const workers = Array.from({ length: workerCount }, (_, workerIndex) => {
     const workerId = workerIndex + 1;
@@ -496,6 +590,13 @@ async function runBlockRange(
             updateChainSyncState: false,
           });
 
+          for (const nodePair of result.touchedNodePairs) {
+            touchedNodePairs.set(
+              `${nodePair.tokenSymbol}:${nodePair.address}`,
+              nodePair,
+            );
+          }
+
           const completed = await completeBlockSyncClaim(
             workerClaimId,
             result.blockHeight,
@@ -549,6 +650,16 @@ async function runBlockRange(
 
   if (failure !== null) {
     throw failure;
+  }
+
+  const balanceRefreshResult = await refreshNodeBalancesFromRpc([
+    ...touchedNodePairs.values(),
+  ]);
+
+  if (balanceRefreshResult.addressCount > 0) {
+    console.log(
+      `Refreshed tracked node balances for ${balanceRefreshResult.addressCount} address(es); updated=${balanceRefreshResult.updatedCount}`,
+    );
   }
 }
 
