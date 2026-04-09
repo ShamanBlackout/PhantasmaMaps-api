@@ -545,12 +545,17 @@ export async function claimNextBlockHeight(
   maxAttempts: number,
   retryBaseDelaySeconds: number,
   retryMaxDelaySeconds: number,
+  staleAfterSeconds: number,
 ): Promise<number | null> {
   const result = await databasePool.query<{ block_height: string }>(
     `WITH candidate AS (
        SELECT block_height
          FROM block_sync_claims
-        WHERE status = 'pending'
+        WHERE (
+             status = 'claimed'
+             AND claimed_at < NOW() - make_interval(secs => $5)
+           )
+           OR status = 'pending'
            OR (
              status = 'failed'
              AND attempt_count < $2
@@ -580,6 +585,7 @@ export async function claimNextBlockHeight(
       Math.max(1, Math.floor(maxAttempts)),
       Math.max(1, Math.floor(retryBaseDelaySeconds)),
       Math.max(1, Math.floor(retryMaxDelaySeconds)),
+      Math.max(1, Math.floor(staleAfterSeconds)),
     ],
   );
 

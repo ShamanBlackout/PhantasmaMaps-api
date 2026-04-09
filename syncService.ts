@@ -481,7 +481,6 @@ async function runBlockRange(
     totalBlocks,
   );
 
-  await resetStaleBlockSyncClaims(syncConfig.claimStaleAfterSeconds);
   await seedBlockSyncClaims(startHeight, endHeight);
 
   const exhaustedClaims = await getExhaustedBlockSyncClaims(
@@ -519,13 +518,12 @@ async function runBlockRange(
 
     return (async () => {
       while (failure === null) {
-        await resetStaleBlockSyncClaims(syncConfig.claimStaleAfterSeconds);
-
         const blockHeight = await claimNextBlockHeight(
           workerClaimId,
           syncConfig.claimMaxAttempts,
           syncConfig.claimRetryBaseDelaySeconds,
           syncConfig.claimRetryMaxDelaySeconds,
+          syncConfig.claimStaleAfterSeconds,
         );
 
         if (blockHeight === null) {
