@@ -1180,16 +1180,21 @@ export async function upsertNodes(
 
   for (const node of nodeMap.values()) {
     const nodeKey = `${node.tokenSymbol}:${node.address}`;
-    const balanceRaw = balancesByNodeKey.get(nodeKey) ?? "0";
+    const balanceRaw = balancesByNodeKey.has(nodeKey)
+      ? (balancesByNodeKey.get(nodeKey) ?? "0")
+      : null;
     const tokenDecimals = tokenDecimalsBySymbol.get(node.tokenSymbol) ?? 0;
-    const balanceNormalized = normalizeRawAmount(balanceRaw, tokenDecimals);
+    const balanceNormalized =
+      balanceRaw === null
+        ? null
+        : normalizeRawAmount(balanceRaw, tokenDecimals);
 
     await client.query(
       `INSERT INTO nodes (address, token_symbol, balance, balance_normalized, metadata)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (address, token_symbol) DO UPDATE
-         SET balance = EXCLUDED.balance,
-             balance_normalized = EXCLUDED.balance_normalized,
+         SET balance = COALESCE(EXCLUDED.balance, nodes.balance),
+             balance_normalized = COALESCE(EXCLUDED.balance_normalized, nodes.balance_normalized),
              metadata = COALESCE(nodes.metadata, '{}'::jsonb) || COALESCE(EXCLUDED.metadata, '{}'::jsonb)`,
       [
         node.address,
