@@ -24,6 +24,24 @@ function readPositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function readOptionalNumber(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function readOptionalIsoDate(value: string | undefined): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : undefined;
+}
+
 function readStringList(value: string | undefined): string[] {
   if (!value) {
     return [];
@@ -219,6 +237,49 @@ app.get("/transactions", async (request: Request, response: Response) => {
       String(request.query.pageSize ?? ""),
       apiConfig.transactionPageSizeDefault,
     );
+    const directionRaw = String(request.query.dir ?? "")
+      .trim()
+      .toLowerCase();
+    const direction =
+      directionRaw === "from" || directionRaw === "to"
+        ? directionRaw
+        : undefined;
+    const counterparty = request.query.counterparty
+      ? String(request.query.counterparty).trim()
+      : undefined;
+    const startTime = readOptionalIsoDate(
+      request.query.startTime ? String(request.query.startTime) : undefined,
+    );
+    const endTime = readOptionalIsoDate(
+      request.query.endTime ? String(request.query.endTime) : undefined,
+    );
+    const minAmount = readOptionalNumber(
+      request.query.minAmount ? String(request.query.minAmount) : undefined,
+    );
+    const maxAmount = readOptionalNumber(
+      request.query.maxAmount ? String(request.query.maxAmount) : undefined,
+    );
+    const minUsd = readOptionalNumber(
+      request.query.minUsd ? String(request.query.minUsd) : undefined,
+    );
+    const maxUsd = readOptionalNumber(
+      request.query.maxUsd ? String(request.query.maxUsd) : undefined,
+    );
+    const usdRateNow = readOptionalNumber(
+      request.query.usdRateNow ? String(request.query.usdRateNow) : undefined,
+    );
+    const sortByRaw = String(request.query.sortBy ?? "")
+      .trim()
+      .toLowerCase();
+    const sortBy =
+      sortByRaw === "amount" || sortByRaw === "usd" || sortByRaw === "time"
+        ? sortByRaw
+        : undefined;
+    const sortDirRaw = String(request.query.sortDir ?? "")
+      .trim()
+      .toLowerCase();
+    const sortDir =
+      sortDirRaw === "asc" || sortDirRaw === "desc" ? sortDirRaw : undefined;
 
     const result = await getTransactionsPage({
       tokenSymbol: request.query.token
@@ -233,6 +294,17 @@ app.get("/transactions", async (request: Request, response: Response) => {
       toBlock: request.query.toBlock
         ? readPositiveInt(String(request.query.toBlock), 0)
         : undefined,
+      direction,
+      counterparty,
+      startTime,
+      endTime,
+      minAmount,
+      maxAmount,
+      minUsd,
+      maxUsd,
+      usdRateNow,
+      sortBy,
+      sortDir,
       page,
       pageSize,
     });
