@@ -125,8 +125,8 @@ Purpose: own the PostgreSQL pool, sync writes, maintenance routines, and read qu
 - `withDatabaseTransaction(callback)`: run a callback in a SQL transaction.
 - `getChainSyncHeight()`: return the `__chain__` checkpoint or `null`.
 - `seedBlockSyncClaims(startHeight, endHeight)`: insert missing block claim rows for a range.
-- `resetStaleBlockSyncClaims(staleAfterSeconds)`: move stale `claimed` rows back to `pending`.
-- `claimNextBlockHeight(workerId, maxAttempts, retryBaseDelaySeconds, retryMaxDelaySeconds)`: atomically claim the next eligible block.
+- `resetStaleBlockSyncClaims(staleAfterSeconds)`: move stale `claimed` rows back to `pending` when called manually or from maintenance code.
+- `claimNextBlockHeight(workerId, maxAttempts, retryBaseDelaySeconds, retryMaxDelaySeconds, staleAfterSeconds)`: atomically claim the next eligible block, including stale `claimed` rows that have aged past the configured stale timeout.
 - `getBlockSyncClaimWaitState(startHeight, endHeight, maxAttempts, retryBaseDelaySeconds, retryMaxDelaySeconds)`: summarize claim queue state.
 - `getExhaustedBlockSyncClaims(startHeight, endHeight, maxAttempts, limit)`: list failed claims that reached the retry cap.
 - `getBlockSyncClaimsView(options)`: return claim summary plus filtered rows for the API.
@@ -172,7 +172,7 @@ Purpose: orchestrate block processing across workers.
 - `fetchNodeBalancesFromRpc(transfers)`: fetch balances for all addresses touched by a block.
 - `fetchTokenMetadataFromRpc(tokenSymbols)`: fetch metadata for all token symbols in a block.
 - `processBlockHeight(blockHeight, options)`: fetch, parse, enrich, and persist one block.
-- `runBlockRange(startHeight, endHeight)`: drive the block claim loop for a height range.
+- `runBlockRange(startHeight, endHeight)`: drive the block claim loop for a height range using direct stale-claim reclamation inside `claimNextBlockHeight()`.
 - `getResumeStartHeight()`: determine where sync should resume from.
 - `runBackfillSync()`: sync from resume height to current tip in backfill mode.
 - `runIncrementalSync()`: sync from resume height to current tip in incremental mode.
@@ -238,7 +238,7 @@ Purpose: create a JSON snapshot showing what a limited parsed insert set looks l
 Purpose: remove old completed claim rows.
 
 - `readNumber(name, fallback)`: parse the cleanup retention period from env.
-- `cleanupCompletedClaims()`: delete completed `block_sync_claims` older than the configured day count.
+- `cleanupCompletedClaims()`: delete completed `block_sync_claims` older than the configured day count, which currently defaults to 2 days.
 
 ### `_temp_restore_fungible_amounts.ts`
 
@@ -249,5 +249,5 @@ Purpose: maintenance helper for repairing fungible edge and transaction amounts.
 ## MAINTENANCE NOTES
 
 - `database.ts` contains both runtime query code and repair logic for previously mis-stored fungible amounts.
-- `syncService.ts` now rechecks stale claims during idle polling so abandoned `claimed` rows cannot block contiguous chain advancement forever.
+- `claimNextBlockHeight()` now treats stale `claimed` rows as directly claimable, which is stronger than the earlier idle-poll reset approach because workers do not need a separate reset pass before reclaiming abandoned work.
 - `syncNodeBalancesNormalized.ts` duplicates some parsing helpers from `syncService.ts`; if the repository grows, those can be moved into a shared utility module.

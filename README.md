@@ -29,6 +29,7 @@ npm run cleanup:claims
 - [ENVIRONMENT](#environment)
 - [COMMANDS](#commands)
 - [DEPLOYMENT](#deployment)
+- [CLEANUP TIMER](#cleanup-timer)
 - [HTTP API](#http-api)
 - [DATABASE LAYOUT](#database-layout)
 - [MIGRATIONS AND ROLLBACK](#migrations-and-rollback)
@@ -265,7 +266,7 @@ The application loads environment variables through `process.loadEnvFile?.()` in
 ### Maintenance
 
 `PHANTASMA_CLAIM_CLEANUP_DAYS`
-: Days of completed block claims to retain before cleanup. Default: `7`.
+: Days of completed block claims to retain before cleanup. Default: `2`.
 
 ## COMMANDS
 
@@ -295,6 +296,71 @@ The application loads environment variables through `process.loadEnvFile?.()` in
 
 `npm run cleanup:claims`
 : Deletes old completed block claims.
+
+## CLEANUP TIMER
+
+The cleanup script in [cleanupBlockClaims.ts](f:/PhantasmaRepositories/PhantasmaMaps-api/cleanupBlockClaims.ts) is intended to run as a scheduled maintenance job. It deletes `completed` rows from `block_sync_claims` when `completed_at` is older than `PHANTASMA_CLAIM_CLEANUP_DAYS`.
+
+### Linux Cron
+
+Example weekly cron job:
+
+```cron
+0 3 * * 0 cd /opt/apps/PhantasmaMaps-api && PHANTASMA_CLAIM_CLEANUP_DAYS=2 /usr/bin/npm run cleanup:claims >> /var/log/phantasma-cleanup.log 2>&1
+```
+
+This runs every Sunday at 03:00.
+
+### systemd Service And Timer
+
+Service file:
+
+```ini
+# /etc/systemd/system/phantasma-cleanup.service
+[Unit]
+Description=Phantasma block_sync_claims cleanup job
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/apps/PhantasmaMaps-api
+Environment=PHANTASMA_CLAIM_CLEANUP_DAYS=2
+ExecStart=/usr/bin/npm run cleanup:claims
+User=root
+```
+
+Timer file:
+
+```ini
+# /etc/systemd/system/phantasma-cleanup.timer
+[Unit]
+Description=Run Phantasma cleanup weekly
+
+[Timer]
+OnCalendar=Sun 03:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Enable and verify:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now phantasma-cleanup.timer
+sudo systemctl status phantasma-cleanup.timer
+sudo systemctl list-timers --all | grep phantasma-cleanup
+```
+
+Manual test:
+
+```bash
+sudo systemctl start phantasma-cleanup.service
+journalctl -u phantasma-cleanup.service -n 100 --no-pager
+```
+
+Operational note: verify the `npm` path on the server with `which npm`. If it is not `/usr/bin/npm`, update `ExecStart` accordingly.
 
 ## DEPLOYMENT
 
@@ -652,6 +718,17 @@ Query parameters:
 
 - `token`: optional token symbol.
 - `address`: optional source or destination address.
+- `dir`: optional direction relative to `address`. Allowed values: `from` or `to`.
+- `counterparty`: optional partial match for the opposite address.
+- `startTime`: optional inclusive UTC ISO datetime lower bound.
+- `endTime`: optional inclusive UTC ISO datetime upper bound.
+- `minAmount`: optional inclusive lower bound on `amountNormalized`.
+- `maxAmount`: optional inclusive upper bound on `amountNormalized`.
+- `minUsd`: optional inclusive lower USD bound. Requires `usdRateNow`.
+- `maxUsd`: optional inclusive upper USD bound. Requires `usdRateNow`.
+- `usdRateNow`: optional USD rate used for USD filters (`amountNormalized * usdRateNow`).
+- `sortBy`: optional sort key. Allowed values: `amount` or `usd`.
+- `sortDir`: optional sort direction. Allowed values: `asc` or `desc`.
 - `fromBlock`: inclusive lower block bound.
 - `toBlock`: inclusive upper block bound.
 - `page`: page number.
@@ -660,7 +737,7 @@ Query parameters:
 Example request:
 
 ```bash
-curl "http://localhost:3000/transactions?token=SOUL&address=P2KExampleAddress&page=1&pageSize=25"
+curl "http://localhost:3000/transactions?token=SOUL&address=P2KExampleAddress&dir=from&counterparty=P2K&startTime=2026-01-01T00:00:00.000Z&endTime=2026-12-31T23:59:59.000Z&minAmount=1&maxAmount=10000&sortBy=usd&sortDir=desc&page=1&pageSize=100"
 ```
 
 Example response:
@@ -668,8 +745,19 @@ Example response:
 ```json
 {
   "page": 1,
-  "pageSize": 25,
+  "pageSize": 100,
   "total": 184,
+  "appliedFilters": {
+    "token": "SOUL",
+    "address": "P2KExampleAddress",
+    "dir": "from",
+    "counterparty": "P2K",
+    "startTime": "2026-01-01T00:00:00.000Z",
+    "endTime": "2026-12-31T23:59:59.000Z",
+    "minAmount": 1,
+    "sortBy": "usd",
+    "sortDir": "desc"
+  },
   "items": [
     {
       "id": "101",
@@ -746,12 +834,12 @@ Example response:
 ### Worker Claim Lifecycle
 
 1. `seedBlockSyncClaims()` ensures the target range exists as rows.
-2. `claimNextBlockHeight()` atomically picks the next eligible block.
+2. `claimNextBlockHeight()` atomically picks the next eligible block, including stale `claimed` rows that have aged past `PHANTASMA_SYNC_CLAIM_STALE_AFTER_SECONDS`.
 3. `processBlockHeight()` fetches and persists data for that block.
 4. `completeBlockSyncClaim()` marks success.
 5. `failBlockSyncClaim()` marks failure and stores the error.
 6. `advanceChainSyncHeightFromClaims()` moves `__chain__` to the highest contiguous completed block.
-7. `resetStaleBlockSyncClaims()` reopens abandoned `claimed` rows.
+7. `resetStaleBlockSyncClaims()` still exists as a maintenance helper, but workers now reclaim stale rows directly in the claim query.
 
 ### RPC Scheduling
 
@@ -764,6 +852,8 @@ Fungibility is determined from `token_metadata.flags.isFungible`. If a token is 
 ### Chain Sync Height
 
 The `__chain__` row in `sync_state` is not simply the highest completed block. It is the highest contiguous completed block. If block `N` is stuck in `claimed`, blocks `N+1` and above may complete, but `__chain__` will not advance beyond `N-1` until the gap is cleared or reset.
+
+Stale-claim recovery is now handled directly by the claim path. When a worker asks for the next block, stale `claimed` rows are treated as claimable candidates before newer pending blocks, which prevents old abandoned work from permanently blocking contiguous chain advancement.
 
 ## DEVELOPER MANUAL
 
@@ -804,9 +894,10 @@ Checks:
 
 Actions:
 
-1. Restart the worker if the stale timeout has already elapsed.
+1. Restart the worker only if it is still running old code and does not contain the direct stale-claim reclaim logic.
 2. Reduce `PHANTASMA_SYNC_CLAIM_STALE_AFTER_SECONDS` if abandoned work is recovering too slowly.
 3. If the row is `failed`, inspect the stored error and retry path rather than forcing chain height manually.
+4. If the row is `claimed` but not yet stale, wait for the threshold or manually reset that specific row if you are certain the claiming worker died.
 
 ### Worker CPU Is Too High
 
@@ -870,6 +961,7 @@ Actions:
 - There is no migration runner in the repository; SQL files are intended to be applied manually or from external deployment tooling.
 - The API is read-only; all write paths are worker and utility scripts.
 - `004_truncate_all.sql` is destructive and intended for reset scenarios only.
+- `cleanupBlockClaims.ts` currently defaults to a 2-day retention window unless `PHANTASMA_CLAIM_CLEANUP_DAYS` is overridden.
 
 ## SEE ALSO
 

@@ -1690,11 +1690,23 @@ export async function getTransactionsPage(options: {
   address?: string;
   fromBlock?: number;
   toBlock?: number;
+  direction?: "from" | "to";
+  counterparty?: string;
+  startTime?: Date;
+  endTime?: Date;
+  minAmount?: number;
+  maxAmount?: number;
+  minUsd?: number;
+  maxUsd?: number;
+  usdRateNow?: number;
+  sortBy?: "amount" | "usd" | "time";
+  sortDir?: "asc" | "desc";
   page: number;
   pageSize: number;
 }): Promise<PaginatedTransactionsResult> {
   const filters: string[] = [];
   const values: Array<string | number> = [];
+  let addressParamIndex: number | null = null;
 
   if (options.tokenSymbol) {
     values.push(options.tokenSymbol);
@@ -1703,8 +1715,68 @@ export async function getTransactionsPage(options: {
 
   if (options.address) {
     values.push(options.address);
+    addressParamIndex = values.length;
     filters.push(
       `(from_address = $${values.length} OR to_address = $${values.length})`,
+    );
+  }
+
+  if (options.direction === "from" && addressParamIndex !== null) {
+    filters.push(`to_address = $${addressParamIndex}`);
+  }
+
+  if (options.direction === "to" && addressParamIndex !== null) {
+    filters.push(`from_address = $${addressParamIndex}`);
+  }
+
+  if (options.counterparty) {
+    values.push(`%${options.counterparty}%`);
+    if (addressParamIndex !== null) {
+      filters.push(
+        `(
+          (from_address = $${addressParamIndex} AND to_address ILIKE $${values.length})
+          OR
+          (to_address = $${addressParamIndex} AND from_address ILIKE $${values.length})
+        )`,
+      );
+    } else {
+      filters.push(
+        `(from_address ILIKE $${values.length} OR to_address ILIKE $${values.length})`,
+      );
+    }
+  }
+
+  if (options.startTime) {
+    values.push(options.startTime.toISOString());
+    filters.push(`timestamp >= $${values.length}::timestamptz`);
+  }
+
+  if (options.endTime) {
+    values.push(options.endTime.toISOString());
+    filters.push(`timestamp <= $${values.length}::timestamptz`);
+  }
+
+  if (options.minAmount !== undefined) {
+    values.push(options.minAmount);
+    filters.push(`amount_normalized >= $${values.length}::numeric`);
+  }
+
+  if (options.maxAmount !== undefined) {
+    values.push(options.maxAmount);
+    filters.push(`amount_normalized <= $${values.length}::numeric`);
+  }
+
+  if (options.usdRateNow !== undefined && options.minUsd !== undefined) {
+    values.push(options.usdRateNow, options.minUsd);
+    filters.push(
+      `(amount_normalized * $${values.length - 1}::numeric) >= $${values.length}::numeric`,
+    );
+  }
+
+  if (options.usdRateNow !== undefined && options.maxUsd !== undefined) {
+    values.push(options.usdRateNow, options.maxUsd);
+    filters.push(
+      `(amount_normalized * $${values.length - 1}::numeric) <= $${values.length}::numeric`,
     );
   }
 
@@ -1725,6 +1797,81 @@ export async function getTransactionsPage(options: {
   );
   const page = Math.max(options.page, 1);
   const offset = (page - 1) * pageSize;
+  const appliedFilters: Record<string, unknown> = {};
+  const normalizedSortDir = options.sortDir === "asc" ? "ASC" : "DESC";
+  const orderByClause =
+    options.sortBy === "amount"
+      ? `SUM(amount_normalized) ${normalizedSortDir}, block_height DESC, tx_hash ASC`
+      : options.sortBy === "usd"
+        ? `(SUM(amount_normalized) * ${
+            options.usdRateNow !== undefined
+              ? `${Number(options.usdRateNow)}`
+              : "1"
+          }::numeric) ${normalizedSortDir}, block_height DESC, tx_hash ASC`
+        : options.sortBy === "time"
+          ? `block_height ${normalizedSortDir}, tx_hash ASC`
+          : "block_height DESC, tx_hash ASC";
+
+  if (options.tokenSymbol) {
+    appliedFilters.token = options.tokenSymbol;
+  }
+
+  if (options.address) {
+    appliedFilters.address = options.address;
+  }
+
+  if (
+    options.address &&
+    (options.direction === "from" || options.direction === "to")
+  ) {
+    appliedFilters.dir = options.direction;
+  }
+
+  if (options.counterparty) {
+    appliedFilters.counterparty = options.counterparty;
+  }
+
+  if (options.startTime) {
+    appliedFilters.startTime = options.startTime.toISOString();
+  }
+
+  if (options.endTime) {
+    appliedFilters.endTime = options.endTime.toISOString();
+  }
+
+  if (options.minAmount !== undefined) {
+    appliedFilters.minAmount = options.minAmount;
+  }
+
+  if (options.maxAmount !== undefined) {
+    appliedFilters.maxAmount = options.maxAmount;
+  }
+
+  if (options.fromBlock !== undefined) {
+    appliedFilters.fromBlock = options.fromBlock;
+  }
+
+  if (options.toBlock !== undefined) {
+    appliedFilters.toBlock = options.toBlock;
+  }
+
+  if (
+    options.usdRateNow !== undefined &&
+    (options.minUsd !== undefined || options.maxUsd !== undefined)
+  ) {
+    appliedFilters.usdRateNow = options.usdRateNow;
+    if (options.minUsd !== undefined) {
+      appliedFilters.minUsd = options.minUsd;
+    }
+    if (options.maxUsd !== undefined) {
+      appliedFilters.maxUsd = options.maxUsd;
+    }
+  }
+
+  if (options.sortBy === "amount" || options.sortBy === "usd") {
+    appliedFilters.sortBy = options.sortBy;
+    appliedFilters.sortDir = options.sortDir === "asc" ? "asc" : "desc";
+  }
 
   const countResult = await databasePool.query(
     `SELECT COUNT(*)::bigint AS total
@@ -1773,7 +1920,7 @@ export async function getTransactionsPage(options: {
                timestamp,
                from_address,
                to_address
-      ORDER BY block_height DESC, tx_hash ASC
+      ORDER BY ${orderByClause}
       LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
   );
@@ -1782,6 +1929,7 @@ export async function getTransactionsPage(options: {
     page,
     pageSize,
     total: Number(countResult.rows[0]?.total ?? 0),
+    appliedFilters,
     items: result.rows.map(mapTransactionRow),
   };
 }

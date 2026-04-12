@@ -64,6 +64,7 @@ export interface PaginatedTransactionsResult {
   page: number;
   pageSize: number;
   total: number;
+  appliedFilters?: Record<string, unknown>;
   items: Array<Record<string, unknown>>;
 }
 
