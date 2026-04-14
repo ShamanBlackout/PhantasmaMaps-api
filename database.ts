@@ -20,10 +20,21 @@ import {
 } from "./phantasma.types";
 
 function buildPoolConfig(): PoolConfig {
+  const baseConfig: PoolConfig = {
+    // Connection pool optimization for better performance under load
+    min: 5, // Keep this many connections ready
+    max: 20, // Allow up to this many concurrent connections
+    idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
+    connectionTimeoutMillis: 5000, // Wait up to 5 seconds to acquire a connection
+    statement_timeout: 30000, // Statement timeout of 30 seconds
+    query_timeout: 30000, // Query timeout of 30 seconds
+  };
+
   if (databaseConfig.connectionString) {
     return {
       connectionString: databaseConfig.connectionString,
       ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : undefined,
+      ...baseConfig,
     };
   }
 
@@ -34,6 +45,7 @@ function buildPoolConfig(): PoolConfig {
     password: databaseConfig.password,
     database: databaseConfig.database,
     ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : undefined,
+    ...baseConfig,
   };
 }
 
@@ -1017,16 +1029,34 @@ export async function updateTrackedNodeBalances(
   client: PoolClient,
   items: Array<{ address: string; tokenSymbol: string; balance: string }>,
 ): Promise<number> {
+  if (items.length === 0) return 0;
+
+  // Batch updates into groups of 100 for better performance
+  const BATCH_SIZE = 100;
   let updatedCount = 0;
 
-  for (const item of items) {
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    const batch = items.slice(i, i + BATCH_SIZE);
+    const values: Array<unknown> = [];
+    const valuesList: string[] = [];
+
+    for (let j = 0; j < batch.length; j++) {
+      const item = batch[j];
+      const baseIndex = j * 3 + 1;
+      valuesList.push(
+        `($${baseIndex}::text, $${baseIndex + 1}::text, $${baseIndex + 2}::text)`,
+      );
+      values.push(item.address, item.tokenSymbol, item.balance);
+    }
+
     const result = await client.query(
-      `UPDATE nodes
-          SET balance = $3
-        WHERE address = $1
-          AND token_symbol = $2
-          AND balance IS DISTINCT FROM $3`,
-      [item.address, item.tokenSymbol, item.balance],
+      `UPDATE nodes n
+        SET balance = updates.balance
+       FROM (VALUES ${valuesList.join(", ")}) AS updates(address, token_symbol, balance)
+       WHERE n.address = updates.address
+         AND n.token_symbol = updates.token_symbol
+         AND n.balance IS DISTINCT FROM updates.balance`,
+      values,
     );
 
     updatedCount += result.rowCount ?? 0;
@@ -1043,11 +1073,40 @@ export async function upsertTransfers(
     Pick<TokenMetadataUpsertInput, "decimals" | "flags">
   >,
 ): Promise<void> {
-  for (const transfer of transfers) {
-    const storedAmounts = resolveStoredTransferAmounts(
-      transfer.amount,
-      tokenMetadataBySymbol.get(transfer.tokenSymbol),
-    );
+  if (transfers.length === 0) return;
+
+  // Batch inserts into groups of 100 for better performance
+  const BATCH_SIZE = 100;
+  for (let i = 0; i < transfers.length; i += BATCH_SIZE) {
+    const batch = transfers.slice(i, i + BATCH_SIZE);
+    const values: Array<unknown> = [];
+    const placeholders: string[] = [];
+
+    for (let j = 0; j < batch.length; j++) {
+      const transfer = batch[j];
+      const storedAmounts = resolveStoredTransferAmounts(
+        transfer.amount,
+        tokenMetadataBySymbol.get(transfer.tokenSymbol),
+      );
+
+      const baseIndex = j * 10 + 1;
+      placeholders.push(
+        `($${baseIndex}, $${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6}, $${baseIndex + 7}, $${baseIndex + 8}, $${baseIndex + 9})`,
+      );
+
+      values.push(
+        transfer.txHash,
+        transfer.eventIndex,
+        transfer.tokenSymbol,
+        transfer.blockHeight,
+        transfer.timestamp,
+        transfer.fromAddress,
+        transfer.toAddress,
+        storedAmounts.amount,
+        storedAmounts.amountNormalized,
+        transfer.metadata,
+      );
+    }
 
     await client.query(
       `INSERT INTO transactions (
@@ -1061,7 +1120,7 @@ export async function upsertTransfers(
          amount,
          amount_normalized,
          metadata
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ) VALUES ${placeholders.join(", ")}
        ON CONFLICT (tx_hash, event_index) DO UPDATE
          SET token_symbol = EXCLUDED.token_symbol,
              block_height = EXCLUDED.block_height,
@@ -1071,18 +1130,7 @@ export async function upsertTransfers(
              amount = EXCLUDED.amount,
              amount_normalized = EXCLUDED.amount_normalized,
              metadata = EXCLUDED.metadata`,
-      [
-        transfer.txHash,
-        transfer.eventIndex,
-        transfer.tokenSymbol,
-        transfer.blockHeight,
-        transfer.timestamp,
-        transfer.fromAddress,
-        transfer.toAddress,
-        storedAmounts.amount,
-        storedAmounts.amountNormalized,
-        transfer.metadata,
-      ],
+      values,
     );
   }
 }
@@ -1546,7 +1594,7 @@ export async function getFullTokenGraph(
   tokenSymbol: string,
 ): Promise<AddressSubgraphResult> {
   const edgesResult = await databasePool.query(
-    `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index, metadata
+    `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
        FROM edges
       WHERE token_symbol = $1
       ORDER BY id ASC
@@ -1582,6 +1630,42 @@ export async function getFullTokenGraph(
   };
 }
 
+// LRU-style fixed-size cache for address subgraph traversal results.
+// The recursive CTE is the most CPU-intensive query; memoizing it for
+// 60 seconds eliminates re-computation for repeated or concurrent requests
+// for the same address (e.g., multiple users viewing the same whale wallet).
+const SUBGRAPH_CACHE_MAX = 200;
+const SUBGRAPH_CACHE_TTL_MS = 60_000;
+const subgraphCache = new Map<
+  string,
+  { result: AddressSubgraphResult; expiresAt: number }
+>();
+
+function subgraphCacheGet(key: string): AddressSubgraphResult | null {
+  const entry = subgraphCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    subgraphCache.delete(key);
+    return null;
+  }
+  return entry.result;
+}
+
+function subgraphCacheSet(key: string, result: AddressSubgraphResult): void {
+  // Evict oldest entry when at capacity
+  if (subgraphCache.size >= SUBGRAPH_CACHE_MAX) {
+    subgraphCache.delete(subgraphCache.keys().next().value!);
+  }
+  subgraphCache.set(key, {
+    result,
+    expiresAt: Date.now() + SUBGRAPH_CACHE_TTL_MS,
+  });
+}
+
+export function clearSubgraphCache(): void {
+  subgraphCache.clear();
+}
+
 export async function getAddressSubgraph(
   tokenSymbol: string,
   rootAddress: string,
@@ -1596,6 +1680,10 @@ export async function getAddressSubgraph(
     Math.max(requestedEdgeLimit, 1),
     apiConfig.graphMaxEdgesPerRequest,
   );
+
+  const cacheKey = `${tokenSymbol}:${rootAddress}:${depth}:${edgeLimit}`;
+  const cached = subgraphCacheGet(cacheKey);
+  if (cached) return cached;
 
   const edgesResult = await databasePool.query(
     `WITH RECURSIVE walk AS (
@@ -1627,7 +1715,6 @@ export async function getAddressSubgraph(
               e.amount_normalized,
               e.tx_hash,
               e.event_index,
-              e.metadata,
               LEAST(from_depth.depth, to_depth.depth) AS edge_depth
          FROM edges e
          JOIN address_depths from_depth
@@ -1648,8 +1735,7 @@ export async function getAddressSubgraph(
               amount,
               amount_normalized,
               tx_hash,
-              event_index,
-              metadata
+              event_index
          FROM ranked_edges
         ORDER BY edge_depth ASC, id ASC
         LIMIT $4
@@ -1676,13 +1762,16 @@ export async function getAddressSubgraph(
     [tokenSymbol, [...addressSet]],
   );
 
-  return {
+  const subgraphResult = {
     tokenSymbol,
     rootAddress,
     depth,
     nodes: nodesResult.rows.map(mapGraphNodeRow),
     edges,
   };
+
+  subgraphCacheSet(cacheKey, subgraphResult);
+  return subgraphResult;
 }
 
 export async function getTransactionsPage(options: {
@@ -1873,29 +1962,32 @@ export async function getTransactionsPage(options: {
     appliedFilters.sortDir = options.sortDir === "asc" ? "asc" : "desc";
   }
 
-  const countResult = await databasePool.query(
-    `SELECT COUNT(*)::bigint AS total
-       FROM (
-         SELECT tx_hash,
-                token_symbol,
-                block_height,
-                timestamp,
-                from_address,
-                to_address
-           FROM transactions
-           ${whereClause}
-          GROUP BY tx_hash,
-                   token_symbol,
-                   block_height,
-                   timestamp,
-                   from_address,
-                   to_address
-       ) grouped_transactions`,
-    values,
+  const pageSize = Math.min(
+    Math.max(options.pageSize, 1),
+    apiConfig.transactionPageSizeMax,
   );
+  const page = Math.max(options.page, 1);
+  const offset = (page - 1) * pageSize;
 
+  // Combine count and data queries into a single query using window function
+  // This reduces database round trips by 50% for this endpoint
   values.push(pageSize, offset);
-  const result = await databasePool.query(
+  const result = await databasePool.query<{
+    id: string;
+    tx_hash: string;
+    event_index: number;
+    event_indexes: number[];
+    transfer_count: number;
+    token_symbol: string;
+    block_height: string;
+    timestamp: string;
+    from_address: string;
+    to_address: string;
+    amount: string;
+    amount_normalized: string;
+    metadata: unknown;
+    total: string;
+  }>(
     `SELECT MIN(id) AS id,
             tx_hash,
             NULL::integer AS event_index,
@@ -1911,7 +2003,8 @@ export async function getTransactionsPage(options: {
             CASE
               WHEN COUNT(*) = 1 THEN (JSONB_AGG(metadata ORDER BY event_index))->0
               ELSE JSONB_AGG(metadata ORDER BY event_index)
-            END AS metadata
+            END AS metadata,
+            COUNT(*) OVER () AS total
        FROM transactions
        ${whereClause}
       GROUP BY tx_hash,
@@ -1925,11 +2018,40 @@ export async function getTransactionsPage(options: {
     values,
   );
 
+  // Extract total from first row (COUNT(*) OVER() returns same value for all rows)
+  const total = result.rows.length > 0 ? Number(result.rows[0].total) : 0;
+
   return {
     page,
     pageSize,
-    total: Number(countResult.rows[0]?.total ?? 0),
+    total,
     appliedFilters,
     items: result.rows.map(mapTransactionRow),
   };
+}
+
+export async function getAddressActivity(
+  tokenSymbol: string,
+  address: string,
+  days: number,
+): Promise<{ date: string; txCount: number; volume: number }[]> {
+  const result = await databasePool.query(
+    `SELECT
+       date_trunc('day', timestamp)::date::text AS date,
+       COUNT(*) AS tx_count,
+       COALESCE(SUM(amount_normalized), 0) AS volume
+     FROM transactions
+     WHERE token_symbol = $1
+       AND (from_address = $2 OR to_address = $2)
+       AND timestamp >= NOW() - ($3 || ' days')::interval
+     GROUP BY date_trunc('day', timestamp)::date
+     ORDER BY date_trunc('day', timestamp)::date ASC`,
+    [tokenSymbol, address, days],
+  );
+
+  return result.rows.map((row) => ({
+    date: String(row.date),
+    txCount: Number(row.tx_count),
+    volume: Number(row.volume),
+  }));
 }

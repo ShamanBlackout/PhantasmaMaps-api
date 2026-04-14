@@ -20,12 +20,14 @@
     "cleanup:claims": "tsx cleanupBlockClaims.ts"
   },
   "dependencies": {
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "pg": "^8.20.0",
     "phantasma-sdk-ts": "^0.7.0"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
