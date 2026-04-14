@@ -8,6 +8,8 @@
   },
   "scripts": {
     "start": "npm run api",
+    "build": "esbuild apiServer.ts --bundle --platform=node --target=node22 --outfile=dist/apiServer.js --external:pg-native",
+    "start:prod": "node dist/apiServer.js",
     "api": "tsx apiServer.ts",
     "backfill": "tsx backfill.ts",
     "backfill:dry-run": "tsx backfillDryRun.ts",
