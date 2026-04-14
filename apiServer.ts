@@ -142,21 +142,28 @@ app.get("/sync-claims", async (request: Request, response: Response) => {
   }
 });
 
-app.get("/tokens", cacheMiddleware("tokens-list", 10 * 60 * 1000), async (_request: Request, response: Response) => {
-  try {
-    const items = await getAvailableTokens();
-    response.json({ items });
-  } catch (error: unknown) {
-    response
-      .status(500)
-      .json({ error: error instanceof Error ? error.message : String(error) });
-  }
-});
+app.get(
+  "/tokens",
+  cacheMiddleware("tokens-list", 10 * 60 * 1000),
+  async (_request: Request, response: Response) => {
+    try {
+      const items = await getAvailableTokens();
+      response.json({ items });
+    } catch (error: unknown) {
+      response
+        .status(500)
+        .json({
+          error: error instanceof Error ? error.message : String(error),
+        });
+    }
+  },
+);
 
 app.get(
   "/tokens/:tokenSymbol/metadata",
   (request: Request, response: Response, next) => {
-    const cacheKey = `token-metadata:${String(request.params.tokenSymbol).toUpperCase()}`;\n    cacheMiddleware(cacheKey, 10 * 60 * 1000)(request, response, next);
+    const cacheKey = `token-metadata:${String(request.params.tokenSymbol).toUpperCase()}`;
+    cacheMiddleware(cacheKey, 10 * 60 * 1000)(request, response, next);
   },
   async (request: Request, response: Response) => {
     try {
@@ -363,11 +370,9 @@ app.get(
       const items = await getAddressActivity(tokenSymbol, address, days);
       response.json({ tokenSymbol, address, days, items });
     } catch (error: unknown) {
-      response
-        .status(500)
-        .json({
-          error: error instanceof Error ? error.message : String(error),
-        });
+      response.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   },
 );

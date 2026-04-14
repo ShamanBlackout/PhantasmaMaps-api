@@ -1962,13 +1962,6 @@ export async function getTransactionsPage(options: {
     appliedFilters.sortDir = options.sortDir === "asc" ? "asc" : "desc";
   }
 
-  const pageSize = Math.min(
-    Math.max(options.pageSize, 1),
-    apiConfig.transactionPageSizeMax,
-  );
-  const page = Math.max(options.page, 1);
-  const offset = (page - 1) * pageSize;
-
   // Combine count and data queries into a single query using window function
   // This reduces database round trips by 50% for this endpoint
   values.push(pageSize, offset);
