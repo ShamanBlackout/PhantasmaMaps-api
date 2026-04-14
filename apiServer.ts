@@ -1,9 +1,13 @@
 import express, { type Request, type Response } from "express";
 import cors from "cors";
+import compression from "compression";
 import { apiConfig } from "./phantasma.config";
 import { createPhantasmaRpcClient } from "./rpcClient";
+import { cacheMiddleware, invalidateCache } from "./responseCache";
 import {
+  clearSubgraphCache,
   closeDatabasePool,
+  getAddressActivity,
   getAddressSubgraph,
   getAvailableTokens,
   getBlockSyncClaimsView,
@@ -65,6 +69,13 @@ const allowedOrigins = String(process.env.PHANTASMA_API_CORS_ORIGINS ?? "")
 app.use(
   cors({
     origin: allowedOrigins.length > 0 ? allowedOrigins : true,
+  }),
+);
+
+app.use(
+  compression({
+    // Only compress responses larger than 1KB; small payloads have negligible gain
+    threshold: 1024,
   }),
 );
 
@@ -131,7 +142,7 @@ app.get("/sync-claims", async (request: Request, response: Response) => {
   }
 });
 
-app.get("/tokens", async (_request: Request, response: Response) => {
+app.get("/tokens", cacheMiddleware("tokens-list", 10 * 60 * 1000), async (_request: Request, response: Response) => {
   try {
     const items = await getAvailableTokens();
     response.json({ items });
@@ -144,6 +155,9 @@ app.get("/tokens", async (_request: Request, response: Response) => {
 
 app.get(
   "/tokens/:tokenSymbol/metadata",
+  (request: Request, response: Response, next) => {
+    const cacheKey = `token-metadata:${String(request.params.tokenSymbol).toUpperCase()}`;\n    cacheMiddleware(cacheKey, 10 * 60 * 1000)(request, response, next);
+  },
   async (request: Request, response: Response) => {
     try {
       const tokenSymbol = String(request.params.tokenSymbol);
@@ -199,6 +213,10 @@ app.get(
 
 app.get(
   "/tokens/:tokenSymbol/top-holders",
+  (request: Request, response: Response, next) => {
+    const cacheKey = `top-holders:${String(request.params.tokenSymbol).toUpperCase()}:${String(request.query.limit ?? "10")}`;
+    cacheMiddleware(cacheKey, 5 * 60 * 1000)(request, response, next);
+  },
   async (request: Request, response: Response) => {
     const limit = readPositiveInt(String(request.query.limit ?? ""), 10);
 
@@ -218,6 +236,10 @@ app.get(
 
 app.get(
   "/graph/token/:tokenSymbol",
+  (request: Request, response: Response, next) => {
+    const cacheKey = `token-graph:${String(request.params.tokenSymbol).toUpperCase()}`;
+    cacheMiddleware(cacheKey, 1 * 60 * 1000)(request, response, next);
+  },
   async (request: Request, response: Response) => {
     try {
       const graph = await getFullTokenGraph(String(request.params.tokenSymbol));
@@ -315,6 +337,45 @@ app.get("/transactions", async (request: Request, response: Response) => {
       .status(500)
       .json({ error: error instanceof Error ? error.message : String(error) });
   }
+});
+
+app.get(
+  "/tokens/:tokenSymbol/activity/:address",
+  async (request: Request, response: Response) => {
+    try {
+      const tokenSymbol = String(request.params.tokenSymbol).trim();
+      const address = String(request.params.address).trim();
+      const days = Math.min(
+        readPositiveInt(
+          request.query.days ? String(request.query.days) : undefined,
+          30,
+        ),
+        365,
+      );
+
+      if (!tokenSymbol || !address) {
+        response
+          .status(400)
+          .json({ error: "tokenSymbol and address are required" });
+        return;
+      }
+
+      const items = await getAddressActivity(tokenSymbol, address, days);
+      response.json({ tokenSymbol, address, days, items });
+    } catch (error: unknown) {
+      response
+        .status(500)
+        .json({
+          error: error instanceof Error ? error.message : String(error),
+        });
+    }
+  },
+);
+
+app.post("/admin/cache/clear", (_request: Request, response: Response) => {
+  invalidateCache();
+  clearSubgraphCache();
+  response.json({ ok: true, message: "All caches cleared" });
 });
 
 const server = app.listen(apiConfig.port, () => {

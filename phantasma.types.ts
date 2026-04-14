@@ -80,6 +80,19 @@ export interface TopHoldersResult {
   items: TopHolderRecord[];
 }
 
+export interface ActivityBucket {
+  date: string;
+  txCount: number;
+  volume: number;
+}
+
+export interface AddressActivityResult {
+  tokenSymbol: string;
+  address: string;
+  days: number;
+  items: ActivityBucket[];
+}
+
 export interface TokenMetadataRecord {
   tokenSymbol: string;
   name: string | null;
