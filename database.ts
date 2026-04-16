@@ -1636,24 +1636,45 @@ export async function getTopHolders(
     address: string;
     net_balance: string;
   }>(
-    `SELECT address,
-            SUM(received) - SUM(sent) AS net_balance
+    `WITH node_balances AS (
+       SELECT address,
+              balance AS net_balance
+         FROM nodes
+        WHERE token_symbol = $1
+          AND balance IS NOT NULL
+          AND balance > 0
+     ),
+     tx_net_balances AS (
+       SELECT address,
+              SUM(received) - SUM(sent) AS net_balance
+         FROM (
+           SELECT to_address AS address,
+                  COALESCE(SUM(amount), 0) AS received,
+                  0::numeric               AS sent
+             FROM transactions
+            WHERE token_symbol = $1
+            GROUP BY to_address
+           UNION ALL
+           SELECT from_address AS address,
+                  0::numeric             AS received,
+                  COALESCE(SUM(amount), 0) AS sent
+             FROM transactions
+            WHERE token_symbol = $1
+            GROUP BY from_address
+         ) t
+        GROUP BY address
+       HAVING SUM(received) - SUM(sent) > 0
+     )
+     SELECT address,
+            net_balance
        FROM (
-         SELECT to_address   AS address,
-                COALESCE(SUM(amount), 0) AS received,
-                0                        AS sent
-           FROM transactions
-          WHERE token_symbol = $1
-          GROUP BY to_address
+         SELECT *
+           FROM node_balances
          UNION ALL
-         SELECT from_address AS address,
-                0            AS received,
-                COALESCE(SUM(amount), 0) AS sent
-           FROM transactions
-          WHERE token_symbol = $1
-          GROUP BY from_address
-       ) t
-      GROUP BY address
+         SELECT *
+           FROM tx_net_balances
+          WHERE NOT EXISTS (SELECT 1 FROM node_balances)
+       ) holders
       ORDER BY net_balance DESC
       LIMIT $2`,
     [tokenSymbol, limit],
