@@ -73311,24 +73311,45 @@ async function getSyncStates() {
 }
 async function getTopHolders(tokenSymbol, limit) {
   const result = await databasePool.query(
-    `SELECT address,
-            SUM(received) - SUM(sent) AS net_balance
+    `WITH node_balances AS (
+       SELECT address,
+              balance AS net_balance
+         FROM nodes
+        WHERE token_symbol = $1
+          AND balance IS NOT NULL
+          AND balance > 0
+     ),
+     tx_net_balances AS (
+       SELECT address,
+              SUM(received) - SUM(sent) AS net_balance
+         FROM (
+           SELECT to_address AS address,
+                  COALESCE(SUM(amount), 0) AS received,
+                  0::numeric               AS sent
+             FROM transactions
+            WHERE token_symbol = $1
+            GROUP BY to_address
+           UNION ALL
+           SELECT from_address AS address,
+                  0::numeric             AS received,
+                  COALESCE(SUM(amount), 0) AS sent
+             FROM transactions
+            WHERE token_symbol = $1
+            GROUP BY from_address
+         ) t
+        GROUP BY address
+       HAVING SUM(received) - SUM(sent) > 0
+     )
+     SELECT address,
+            net_balance
        FROM (
-         SELECT to_address   AS address,
-                COALESCE(SUM(amount), 0) AS received,
-                0                        AS sent
-           FROM transactions
-          WHERE token_symbol = $1
-          GROUP BY to_address
+         SELECT *
+           FROM node_balances
          UNION ALL
-         SELECT from_address AS address,
-                0            AS received,
-                COALESCE(SUM(amount), 0) AS sent
-           FROM transactions
-          WHERE token_symbol = $1
-          GROUP BY from_address
-       ) t
-      GROUP BY address
+         SELECT *
+           FROM tx_net_balances
+          WHERE NOT EXISTS (SELECT 1 FROM node_balances)
+       ) holders
       ORDER BY net_balance DESC
       LIMIT $2`,
     [tokenSymbol, limit]
@@ -73710,6 +73731,24 @@ async function getAddressActivity(tokenSymbol, address, days) {
     volume: Number(row.volume)
   }));
 }
+async function getAddressConnections(tokenSymbol, address) {
+  const result = await databasePool.query(
+    `SELECT
+       counterparty,
+       total_volume,
+       transaction_count
+     FROM address_connections
+     WHERE token_symbol = $1
+       AND address = $2
+     ORDER BY total_volume DESC`,
+    [tokenSymbol, address]
+  );
+  return result.rows.map((row) => ({
+    counterparty: String(row.counterparty),
+    totalVolume: Number(row.total_volume),
+    transactionCount: Number(row.transaction_count)
+  }));
+}
 
 // apiServer.ts
 function readPositiveInt(value, fallback) {
@@ -73858,6 +73897,29 @@ app.get(
         edgeLimit
       );
       response.json(graph);
+    } catch (error) {
+      response.status(500).json({
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+);
+app.get(
+  "/connections/address/:address",
+  async (request, response) => {
+    const tokenSymbol = String(request.query.token ?? "").trim();
+    if (!tokenSymbol) {
+      response.status(400).json({ error: "token query parameter is required" });
+      return;
+    }
+    try {
+      const address = String(request.params.address);
+      const connections = await getAddressConnections(tokenSymbol, address);
+      response.json({
+        tokenSymbol,
+        address,
+        items: connections
+      });
     } catch (error) {
       response.status(500).json({
         error: error instanceof Error ? error.message : String(error)
