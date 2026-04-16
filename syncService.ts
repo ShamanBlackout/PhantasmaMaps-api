@@ -15,6 +15,7 @@ import {
   updateTrackedNodeBalances,
   updateTokenSyncStateForBlock,
   upsertEdges,
+  upsertAddressConnections,
   upsertNodes,
   upsertTokenMetadata,
   upsertTransfers,
@@ -445,7 +446,12 @@ export async function processBlockHeight(
         nodeBalances,
         new Map(tokenMetadata.map((item) => [item.tokenSymbol, item.decimals])),
       );
-      await upsertEdges(client, parsedBlock.transfers, tokenMetadataBySymbol);
+      const insertedEdges = await upsertEdges(
+        client,
+        parsedBlock.transfers,
+        tokenMetadataBySymbol,
+      );
+      await upsertAddressConnections(client, insertedEdges);
     }
 
     await updateTokenSyncStateForBlock(

@@ -1318,14 +1318,33 @@ export async function upsertEdges(
     string,
     Pick<TokenMetadataUpsertInput, "decimals" | "flags">
   >,
-): Promise<void> {
+): Promise<
+  Array<{
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+    amountNormalized: string;
+  }>
+> {
+  const insertedEdges: Array<{
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+    amountNormalized: string;
+  }> = [];
+
   for (const transfer of transfers) {
     const storedAmounts = resolveStoredTransferAmounts(
       transfer.amount,
       tokenMetadataBySymbol.get(transfer.tokenSymbol),
     );
 
-    await client.query(
+    const result = await client.query<{
+      token_symbol: string;
+      from_address: string;
+      to_address: string;
+      amount_normalized: string;
+    }>(
       `INSERT INTO edges (
          token_symbol,
          from_address,
@@ -1336,7 +1355,8 @@ export async function upsertEdges(
          event_index,
          metadata
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (tx_hash, event_index) DO NOTHING`,
+       ON CONFLICT (tx_hash, event_index) DO NOTHING
+       RETURNING token_symbol, from_address, to_address, amount_normalized`,
       [
         transfer.tokenSymbol,
         transfer.fromAddress,
@@ -1347,6 +1367,104 @@ export async function upsertEdges(
         transfer.eventIndex,
         transfer.metadata,
       ],
+    );
+
+    if (result.rowCount && result.rowCount > 0) {
+      const row = result.rows[0];
+      insertedEdges.push({
+        tokenSymbol: String(row.token_symbol),
+        fromAddress: String(row.from_address),
+        toAddress: String(row.to_address),
+        amountNormalized: String(row.amount_normalized ?? "0"),
+      });
+    }
+  }
+
+  return insertedEdges;
+}
+
+export async function upsertAddressConnections(
+  client: PoolClient,
+  edges: Array<{
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+    amountNormalized: string;
+  }>,
+): Promise<void> {
+  if (edges.length === 0) {
+    return;
+  }
+
+  const BATCH_SIZE = 300;
+
+  for (let i = 0; i < edges.length; i += BATCH_SIZE) {
+    const batch = edges.slice(i, i + BATCH_SIZE);
+    const values: Array<unknown> = [];
+    const placeholders: string[] = [];
+    let rowIndex = 0;
+
+    for (const edge of batch) {
+      const baseIndexA = rowIndex * 5 + 1;
+      placeholders.push(
+        `($${baseIndexA}, $${baseIndexA + 1}, $${baseIndexA + 2}, $${baseIndexA + 3}, $${baseIndexA + 4})`,
+      );
+      values.push(
+        edge.tokenSymbol,
+        edge.fromAddress,
+        edge.toAddress,
+        edge.amountNormalized,
+        1,
+      );
+      rowIndex += 1;
+
+      const baseIndexB = rowIndex * 5 + 1;
+      placeholders.push(
+        `($${baseIndexB}, $${baseIndexB + 1}, $${baseIndexB + 2}, $${baseIndexB + 3}, $${baseIndexB + 4})`,
+      );
+      values.push(
+        edge.tokenSymbol,
+        edge.toAddress,
+        edge.fromAddress,
+        edge.amountNormalized,
+        1,
+      );
+      rowIndex += 1;
+    }
+
+    await client.query(
+      `WITH input_rows (token_symbol, address, counterparty, total_volume, transaction_count) AS (
+         VALUES ${placeholders.join(", ")}
+       ),
+       aggregated AS (
+         SELECT token_symbol,
+                address,
+                counterparty,
+                SUM(total_volume::numeric) AS total_volume,
+                SUM(transaction_count::integer) AS transaction_count
+           FROM input_rows
+          GROUP BY token_symbol, address, counterparty
+       )
+       INSERT INTO address_connections (
+         token_symbol,
+         address,
+         counterparty,
+         total_volume,
+         transaction_count,
+         last_updated
+       )
+       SELECT token_symbol,
+              address,
+              counterparty,
+              total_volume,
+              transaction_count,
+              NOW()
+         FROM aggregated
+       ON CONFLICT (token_symbol, address, counterparty) DO UPDATE
+         SET total_volume = address_connections.total_volume + EXCLUDED.total_volume,
+             transaction_count = address_connections.transaction_count + EXCLUDED.transaction_count,
+             last_updated = NOW()`,
+      values,
     );
   }
 }
@@ -2046,5 +2164,34 @@ export async function getAddressActivity(
     date: String(row.date),
     txCount: Number(row.tx_count),
     volume: Number(row.volume),
+  }));
+}
+
+export async function getAddressConnections(
+  tokenSymbol: string,
+  address: string,
+): Promise<
+  Array<{
+    counterparty: string;
+    totalVolume: number;
+    transactionCount: number;
+  }>
+> {
+  const result = await databasePool.query(
+    `SELECT
+       counterparty,
+       total_volume,
+       transaction_count
+     FROM address_connections
+     WHERE token_symbol = $1
+       AND address = $2
+     ORDER BY total_volume DESC`,
+    [tokenSymbol, address],
+  );
+
+  return result.rows.map((row) => ({
+    counterparty: String(row.counterparty),
+    totalVolume: Number(row.total_volume),
+    transactionCount: Number(row.transaction_count),
   }));
 }
