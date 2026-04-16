@@ -8,6 +8,7 @@ import {
   clearSubgraphCache,
   closeDatabasePool,
   getAddressActivity,
+  getAddressConnections,
   getAddressSubgraph,
   getAvailableTokens,
   getBlockSyncClaimsView,
@@ -150,11 +151,9 @@ app.get(
       const items = await getAvailableTokens();
       response.json({ items });
     } catch (error: unknown) {
-      response
-        .status(500)
-        .json({
-          error: error instanceof Error ? error.message : String(error),
-        });
+      response.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   },
 );
@@ -210,6 +209,32 @@ app.get(
         edgeLimit,
       );
       response.json(graph);
+    } catch (error: unknown) {
+      response.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
+);
+
+app.get(
+  "/connections/address/:address",
+  async (request: Request, response: Response) => {
+    const tokenSymbol = String(request.query.token ?? "").trim();
+
+    if (!tokenSymbol) {
+      response.status(400).json({ error: "token query parameter is required" });
+      return;
+    }
+
+    try {
+      const address = String(request.params.address);
+      const connections = await getAddressConnections(tokenSymbol, address);
+      response.json({
+        tokenSymbol,
+        address,
+        items: connections,
+      });
     } catch (error: unknown) {
       response.status(500).json({
         error: error instanceof Error ? error.message : String(error),
