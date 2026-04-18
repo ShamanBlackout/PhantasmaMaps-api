@@ -6,7 +6,7 @@ PhantasmaMaps-api developer manual - source file reference and function-by-funct
 
 ## PURPOSE
 
-This manual is the symbol-level companion to [README.md](f:/PhantasmaRepositories/PhantasmaMaps-api/README.md). The README explains how to run and operate the system. This document explains how the code is organized and what each function is responsible for.
+This manual is the symbol-level companion to [README.md](README.md). The README explains how to run and operate the system. This document explains how the code is organized and what each function is responsible for.
 
 ## TABLE OF CONTENTS
 
@@ -18,7 +18,7 @@ This manual is the symbol-level companion to [README.md](f:/PhantasmaRepositorie
 
 ## FILE REFERENCE
 
-### `apiServer.ts`
+### `src/apiServer.ts`
 
 Purpose: defines the Express application and read-only HTTP API.
 
@@ -35,7 +35,7 @@ Purpose: defines the Express application and read-only HTTP API.
 - `/transactions` handler: returns paginated transaction rows.
 - `shutdown()`: closes the database pool and stops the HTTP server on `SIGINT` or `SIGTERM`.
 
-### `phantasma.config.ts`
+### `src/phantasma.config.ts`
 
 Purpose: parses environment variables into typed runtime configuration.
 
@@ -49,7 +49,7 @@ Purpose: parses environment variables into typed runtime configuration.
 - `apiConfig`: exported API configuration object.
 - `databaseConfig`: exported PostgreSQL configuration object.
 
-### `phantasma.types.ts`
+### `src/phantasma.types.ts`
 
 Purpose: shared application types and constants.
 
@@ -68,7 +68,7 @@ Purpose: shared application types and constants.
 - `TokenMetadataUpsertInput`: token metadata upsert payload type.
 - `TokenEventMatch`: decoded event pair helper type.
 
-### `rpcClient.ts`
+### `src/rpcClient.ts`
 
 Purpose: wraps `phantasma-sdk-ts` with timeout, retry, failover, and rate limiting.
 
@@ -90,7 +90,7 @@ Purpose: wraps `phantasma-sdk-ts` with timeout, retry, failover, and rate limiti
 - `PhantasmaRpcClient.getConnectionSummary()`: return current client configuration and active RPC URL.
 - `createPhantasmaRpcClient()`: exported factory for a new RPC client.
 
-### `transferParser.ts`
+### `src/transferParser.ts`
 
 Purpose: translate raw Phantasma blocks into normalized transfer records.
 
@@ -103,7 +103,7 @@ Purpose: translate raw Phantasma blocks into normalized transfer records.
 - `pairTransferEvents(tx)`: pair send and receive events into transfer candidates.
 - `extractTransfersFromBlock(block, requestedHeight)`: parse one block into transfers, token list, and counts.
 
-### `database.ts`
+### `src/database.ts`
 
 Purpose: own the PostgreSQL pool, sync writes, maintenance routines, and read queries used by the API.
 
@@ -153,7 +153,7 @@ Purpose: own the PostgreSQL pool, sync writes, maintenance routines, and read qu
 - `getAddressSubgraph(tokenSymbol, rootAddress, depth, edgeLimit)`: traverse outward from an address and return a bounded subgraph.
 - `getTransactionsPage(options)`: return paginated transaction rows with optional filters.
 
-### `syncService.ts`
+### `src/syncService.ts`
 
 Purpose: orchestrate block processing across workers.
 
@@ -177,25 +177,25 @@ Purpose: orchestrate block processing across workers.
 - `runBackfillSync()`: sync from resume height to current tip in backfill mode.
 - `runIncrementalSync()`: sync from resume height to current tip in incremental mode.
 
-### `backfill.ts`
+### `src/backfill.ts`
 
 Purpose: main historical sync entrypoint.
 
 - Module entrypoint: runs `runBackfillSync()`, then normalizes nodes, edges, and transactions.
 
-### `backfillDryRun.ts`
+### `src/backfillDryRun.ts`
 
 Purpose: inspect parser output without writing to PostgreSQL.
 
 - `runBackfillDryRun()`: fetch and parse five blocks, then write `backfill-dry-run.json`.
 
-### `syncIncremental.ts`
+### `src/syncIncremental.ts`
 
 Purpose: incremental worker entrypoint.
 
 - Module entrypoint: runs `runIncrementalSync()` and closes the database pool.
 
-### `syncNodeBalancesNormalized.ts`
+### `src/syncNodeBalancesNormalized.ts`
 
 Purpose: repair and refresh token metadata, tracked node balances, and normalized amount fields.
 
@@ -213,7 +213,7 @@ Purpose: repair and refresh token metadata, tracked node balances, and normalize
 - `refreshTrackedNodeBalancesFromRpc()`: refresh balances for addresses already present in the nodes table.
 - `run()`: execute metadata refresh, balance refresh, and normalization passes.
 
-### `connectPhantasma.ts`
+### `src/connectPhantasma.ts`
 
 Purpose: RPC smoke test utility.
 
@@ -221,19 +221,19 @@ Purpose: RPC smoke test utility.
 - `resolveChainNames(chainsValue)`: derive chain names from the RPC response.
 - `connectToPhantasma()`: connect to RPC and print current network details.
 
-### `findFirstTransferBlock.ts`
+### `src/findFirstTransferBlock.ts`
 
 Purpose: locate the first block containing transfers from a fixed starting block.
 
 - `findFirstTransferBlock()`: scan blocks sequentially until a transfer-bearing block is found.
 
-### `testDatabaseInserts.ts`
+### `src/testDatabaseInserts.ts`
 
 Purpose: create a JSON snapshot showing what a limited parsed insert set looks like.
 
 - `runDatabaseInsertTest()`: fetch a fixed block range, derive transfer-like nodes, edges, and sync state, and write `test-database-snapshot.json`.
 
-### `cleanupBlockClaims.ts`
+### `src/cleanupBlockClaims.ts`
 
 Purpose: remove old completed claim rows.
 
@@ -248,6 +248,6 @@ Purpose: maintenance helper for repairing fungible edge and transaction amounts.
 
 ## MAINTENANCE NOTES
 
-- `database.ts` contains both runtime query code and repair logic for previously mis-stored fungible amounts.
+- `src/database.ts` contains both runtime query code and repair logic for previously mis-stored fungible amounts.
 - `claimNextBlockHeight()` now treats stale `claimed` rows as directly claimable, which is stronger than the earlier idle-poll reset approach because workers do not need a separate reset pass before reclaiming abandoned work.
-- `syncNodeBalancesNormalized.ts` duplicates some parsing helpers from `syncService.ts`; if the repository grows, those can be moved into a shared utility module.
+- `src/syncNodeBalancesNormalized.ts` duplicates some parsing helpers from `src/syncService.ts`; if the repository grows, those can be moved into a shared utility module.
