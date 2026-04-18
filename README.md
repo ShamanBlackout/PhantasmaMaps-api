@@ -23,6 +23,7 @@ npm run cleanup:claims
 - [SYNOPSIS](#synopsis)
 - [TABLE OF CONTENTS](#table-of-contents)
 - [DESCRIPTION](#description)
+- [PROJECT STRUCTURE](#project-structure)
 - [ARCHITECTURE](#architecture)
 - [REQUIREMENTS](#requirements)
 - [INSTALLATION](#installation)
@@ -50,30 +51,53 @@ PhantasmaMaps-api ingests transfer activity from the Phantasma chain, normalizes
 
 The worker side processes blocks by height. Each block is claimed through the `block_sync_claims` table, fetched from RPC, parsed into transfers, enriched with balances and token metadata, then written into `transactions`, `nodes`, `edges`, `token_metadata`, and `sync_state`. The chain-wide checkpoint uses the synthetic token symbol `__chain__` to represent the highest contiguous completed block.
 
+## PROJECT STRUCTURE
+
+```text
+src/
+  apiServer.ts
+  database.ts
+  rpcClient.ts
+  syncService.ts
+  transferParser.ts
+  ...other worker and utility entrypoints
+sql/
+  migrations/
+    001_init.sql
+    ...
+    010_address_connections.sql
+  maintenance/
+    004_truncate_all.sql
+README.md
+DEVELOPER_MANUAL.md
+docker-compose.yml
+Dockerfile
+```
+
 ## ARCHITECTURE
 
 ```text
 Phantasma RPC
     |
     v
-rpcClient.ts
+src/rpcClient.ts
     |
     v
-transferParser.ts ----> syncService.ts ----> database.ts ----> PostgreSQL
+src/transferParser.ts ----> src/syncService.ts ----> src/database.ts ----> PostgreSQL
                                                 |
                                                 v
-                                           apiServer.ts
+                                           src/apiServer.ts
 ```
 
 ### Data Flow
 
 1. A worker determines the next block to process from `block_sync_claims`.
-2. `rpcClient.ts` fetches the block, account balances, and token metadata.
-3. `transferParser.ts` pairs `TOKENSEND` and `TOKENRECEIVE` events into transfers.
-4. `syncService.ts` enriches those transfers with node balances and token metadata.
-5. `database.ts` persists transfers, nodes, edges, token metadata, and sync checkpoints.
+2. `src/rpcClient.ts` fetches the block, account balances, and token metadata.
+3. `src/transferParser.ts` pairs `TOKENSEND` and `TOKENRECEIVE` events into transfers.
+4. `src/syncService.ts` enriches those transfers with node balances and token metadata.
+5. `src/database.ts` persists transfers, nodes, edges, token metadata, and sync checkpoints.
 6. `advanceChainSyncHeightFromClaims()` advances `__chain__` only when the completed range is contiguous.
-7. `apiServer.ts` serves query endpoints from the stored data.
+7. `src/apiServer.ts` serves query endpoints from the stored data.
 
 ## REQUIREMENTS
 
@@ -94,14 +118,14 @@ npm install
 3. Apply SQL files in ascending order:
 
 ```text
-001_init.sql
-002_transactions.sql
-003_sync_state.sql
-004_token_metadata.sql
-005_nodes_balance_normalized.sql
-006_edges_amount_normalized.sql
-007_transactions_amount_normalized.sql
-008_block_sync_claims.sql
+sql/migrations/001_init.sql
+sql/migrations/002_transactions.sql
+sql/migrations/003_sync_state.sql
+sql/migrations/004_token_metadata.sql
+sql/migrations/005_nodes_balance_normalized.sql
+sql/migrations/006_edges_amount_normalized.sql
+sql/migrations/007_transactions_amount_normalized.sql
+sql/migrations/008_block_sync_claims.sql
 ```
 
 4. Start the API or one of the worker commands.
@@ -116,14 +140,14 @@ PowerShell example using `psql` and `DATABASE_URL` from `.env`:
 
 ```powershell
 $env:DATABASE_URL = "postgres://USER:PASSWORD@HOST:25060/DBNAME?sslmode=require"
-psql $env:DATABASE_URL -f .\001_init.sql
-psql $env:DATABASE_URL -f .\002_transactions.sql
-psql $env:DATABASE_URL -f .\003_sync_state.sql
-psql $env:DATABASE_URL -f .\004_token_metadata.sql
-psql $env:DATABASE_URL -f .\005_nodes_balance_normalized.sql
-psql $env:DATABASE_URL -f .\006_edges_amount_normalized.sql
-psql $env:DATABASE_URL -f .\007_transactions_amount_normalized.sql
-psql $env:DATABASE_URL -f .\008_block_sync_claims.sql
+psql $env:DATABASE_URL -f .\sql/migrations/001_init.sql
+psql $env:DATABASE_URL -f .\sql/migrations/002_transactions.sql
+psql $env:DATABASE_URL -f .\sql/migrations/003_sync_state.sql
+psql $env:DATABASE_URL -f .\sql/migrations/004_token_metadata.sql
+psql $env:DATABASE_URL -f .\sql/migrations/005_nodes_balance_normalized.sql
+psql $env:DATABASE_URL -f .\sql/migrations/006_edges_amount_normalized.sql
+psql $env:DATABASE_URL -f .\sql/migrations/007_transactions_amount_normalized.sql
+psql $env:DATABASE_URL -f .\sql/migrations/008_block_sync_claims.sql
 ```
 
 Bash example:
@@ -131,14 +155,14 @@ Bash example:
 ```bash
 export DATABASE_URL="postgres://USER:PASSWORD@HOST:25060/DBNAME?sslmode=require"
 for file in \
-  001_init.sql \
-  002_transactions.sql \
-  003_sync_state.sql \
-  004_token_metadata.sql \
-  005_nodes_balance_normalized.sql \
-  006_edges_amount_normalized.sql \
-  007_transactions_amount_normalized.sql \
-  008_block_sync_claims.sql; do
+  sql/migrations/001_init.sql \
+  sql/migrations/002_transactions.sql \
+  sql/migrations/003_sync_state.sql \
+  sql/migrations/004_token_metadata.sql \
+  sql/migrations/005_nodes_balance_normalized.sql \
+  sql/migrations/006_edges_amount_normalized.sql \
+  sql/migrations/007_transactions_amount_normalized.sql \
+  sql/migrations/008_block_sync_claims.sql; do
   psql "$DATABASE_URL" -f "$file"
 done
 ```
@@ -156,7 +180,7 @@ pg_dump "$DATABASE_URL" > phantasmamaps-predeploy.sql
 This repository does not ship reversible `down` migrations. In practice, rollback means one of these paths:
 
 1. Restore the database from a backup taken before the migration.
-2. If the issue is data-only and you intend to rebuild derived state, truncate runtime tables with [004_truncate_all.sql](f:/PhantasmaRepositories/PhantasmaMaps-api/004_truncate_all.sql), then rerun backfill.
+2. If the issue is data-only and you intend to rebuild derived state, truncate runtime tables with [sql/maintenance/004_truncate_all.sql](sql/maintenance/004_truncate_all.sql), then rerun backfill.
 3. If a migration only adds nullable columns or indexes and the application still runs, fix forward with a follow-up migration instead of dropping production data.
 
 Restore from a SQL backup:
@@ -168,11 +192,11 @@ psql "$DATABASE_URL" -f phantasmamaps-predeploy.sql
 Reset runtime tables and rebuild derived state:
 
 ```bash
-psql "$DATABASE_URL" -f 004_truncate_all.sql
+psql "$DATABASE_URL" -f sql/maintenance/004_truncate_all.sql
 npm run backfill
 ```
 
-Important note: [004_truncate_all.sql](f:/PhantasmaRepositories/PhantasmaMaps-api/004_truncate_all.sql) clears `edges`, `nodes`, `transactions`, `sync_state`, and `graph_versions`. It does not remove `token_metadata` or `block_sync_claims`, so use it only when that partial reset matches the repair you need.
+Important note: [sql/maintenance/004_truncate_all.sql](sql/maintenance/004_truncate_all.sql) clears `edges`, `nodes`, `transactions`, `sync_state`, and `graph_versions`. It does not remove `token_metadata` or `block_sync_claims`, so use it only when that partial reset matches the repair you need.
 
 ## ENVIRONMENT
 
@@ -299,7 +323,7 @@ The application loads environment variables through `process.loadEnvFile?.()` in
 
 ## CLEANUP TIMER
 
-The cleanup script in [cleanupBlockClaims.ts](f:/PhantasmaRepositories/PhantasmaMaps-api/cleanupBlockClaims.ts) is intended to run as a scheduled maintenance job. It deletes `completed` rows from `block_sync_claims` when `completed_at` is older than `PHANTASMA_CLAIM_CLEANUP_DAYS`.
+The cleanup script in [src/cleanupBlockClaims.ts](src/cleanupBlockClaims.ts) is intended to run as a scheduled maintenance job. It deletes `completed` rows from `block_sync_claims` when `completed_at` is older than `PHANTASMA_CLAIM_CLEANUP_DAYS`.
 
 ### Linux Cron
 
@@ -376,7 +400,7 @@ The API process is read-only. Keeping the HTTP server running does not ingest ne
 
 ### Docker Image
 
-The repository includes [Dockerfile](f:/PhantasmaRepositories/PhantasmaMaps-api/Dockerfile). It:
+The repository includes [Dockerfile](Dockerfile). It:
 
 - uses `node:22-bookworm-slim`
 - runs `npm ci`
@@ -404,7 +428,7 @@ docker run --rm --env-file .env phantasmamaps-api npm run sync
 
 ### Docker Compose
 
-The repository includes [docker-compose.yml](f:/PhantasmaRepositories/PhantasmaMaps-api/docker-compose.yml) with three services:
+The repository includes [docker-compose.yml](docker-compose.yml) with three services:
 
 - `api`: long-running HTTP server on port `3000`
 - `backfill`: one-shot historical sync job under the `jobs` profile
@@ -802,31 +826,31 @@ Example response:
 
 ### Migration Files
 
-`001_init.sql`
+`sql/migrations/001_init.sql`
 : Creates `graph_versions`, `nodes`, and `edges`.
 
-`002_transactions.sql`
+`sql/migrations/002_transactions.sql`
 : Creates `transactions` and its uniqueness/indexing strategy.
 
-`003_sync_state.sql`
+`sql/migrations/003_sync_state.sql`
 : Creates `sync_state` for checkpoint tracking.
 
-`004_token_metadata.sql`
+`sql/migrations/004_token_metadata.sql`
 : Creates `token_metadata`.
 
-`004_truncate_all.sql`
+`sql/maintenance/004_truncate_all.sql`
 : Development utility to truncate graph, transaction, and sync tables.
 
-`005_nodes_balance_normalized.sql`
+`sql/migrations/005_nodes_balance_normalized.sql`
 : Adds normalized node balances.
 
-`006_edges_amount_normalized.sql`
+`sql/migrations/006_edges_amount_normalized.sql`
 : Adds normalized edge amounts.
 
-`007_transactions_amount_normalized.sql`
+`sql/migrations/007_transactions_amount_normalized.sql`
 : Adds normalized transaction amounts.
 
-`008_block_sync_claims.sql`
+`sql/migrations/008_block_sync_claims.sql`
 : Creates the distributed claim table used by workers.
 
 ## OPERATIONAL MODEL
@@ -857,7 +881,7 @@ Stale-claim recovery is now handled directly by the claim path. When a worker as
 
 ## DEVELOPER MANUAL
 
-The full file-by-file function catalog was moved to [DEVELOPER_MANUAL.md](f:/PhantasmaRepositories/PhantasmaMaps-api/DEVELOPER_MANUAL.md). Use that document when you need symbol-level descriptions rather than operational guidance.
+The full file-by-file function catalog was moved to [DEVELOPER_MANUAL.md](DEVELOPER_MANUAL.md). Use that document when you need symbol-level descriptions rather than operational guidance.
 
 ## OPERATOR RUNBOOK
 
@@ -952,7 +976,7 @@ Checks:
 Actions:
 
 1. Restore from backup if the deployment changed schema in an unsafe way.
-2. If the schema is fine and the data is rebuildable, run [004_truncate_all.sql](f:/PhantasmaRepositories/PhantasmaMaps-api/004_truncate_all.sql) and then `npm run backfill`.
+2. If the schema is fine and the data is rebuildable, run [sql/maintenance/004_truncate_all.sql](sql/maintenance/004_truncate_all.sql) and then `npm run backfill`.
 3. Run `npm run sync:nodes-normalized` when you need to refresh normalized balances and amounts without a full schema rollback.
 
 ## DEVELOPMENT NOTES
@@ -960,8 +984,8 @@ Actions:
 - Type checking is provided by `npm run check`.
 - There is no migration runner in the repository; SQL files are intended to be applied manually or from external deployment tooling.
 - The API is read-only; all write paths are worker and utility scripts.
-- `004_truncate_all.sql` is destructive and intended for reset scenarios only.
-- `cleanupBlockClaims.ts` currently defaults to a 2-day retention window unless `PHANTASMA_CLAIM_CLEANUP_DAYS` is overridden.
+- `sql/maintenance/004_truncate_all.sql` is destructive and intended for reset scenarios only.
+- `src/cleanupBlockClaims.ts` currently defaults to a 2-day retention window unless `PHANTASMA_CLAIM_CLEANUP_DAYS` is overridden.
 
 ## SEE ALSO
 
