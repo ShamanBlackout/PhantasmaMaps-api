@@ -1691,6 +1691,93 @@ export async function getTopHolders(
   };
 }
 
+async function getTopHolderGraphNodes(
+  tokenSymbol: string,
+  limit: number,
+): Promise<GraphNodeRecord[]> {
+  const result = await databasePool.query<{
+    address: string;
+    balance: string;
+    balance_normalized: string | null;
+    label: string | null;
+    metadata: Record<string, unknown> | null;
+    decimals: number | null;
+  }>(
+    `WITH node_balances AS (
+       SELECT address,
+              balance AS net_balance,
+              balance_normalized,
+              label,
+              metadata
+         FROM nodes
+        WHERE token_symbol = $1
+          AND balance IS NOT NULL
+          AND balance > 0
+     ),
+     tx_net_balances AS (
+       SELECT address,
+              SUM(received) - SUM(sent) AS net_balance
+         FROM (
+           SELECT to_address AS address,
+                  COALESCE(SUM(amount), 0) AS received,
+                  0::numeric AS sent
+             FROM transactions
+            WHERE token_symbol = $1
+            GROUP BY to_address
+           UNION ALL
+           SELECT from_address AS address,
+                  0::numeric AS received,
+                  COALESCE(SUM(amount), 0) AS sent
+             FROM transactions
+            WHERE token_symbol = $1
+            GROUP BY from_address
+         ) t
+        GROUP BY address
+       HAVING SUM(received) - SUM(sent) > 0
+     ),
+     holders AS (
+       SELECT address,
+              net_balance,
+              balance_normalized,
+              label,
+              metadata
+         FROM node_balances
+       UNION ALL
+       SELECT address,
+              net_balance,
+              NULL::numeric AS balance_normalized,
+              NULL::text AS label,
+              NULL::jsonb AS metadata
+         FROM tx_net_balances
+        WHERE NOT EXISTS (SELECT 1 FROM node_balances)
+     )
+     SELECT holders.address,
+            holders.net_balance::text AS balance,
+            holders.balance_normalized::text AS balance_normalized,
+            holders.label,
+            holders.metadata,
+            tm.decimals
+       FROM holders
+       LEFT JOIN token_metadata tm
+         ON tm.token_symbol = $1
+      ORDER BY holders.net_balance DESC
+      LIMIT $2`,
+    [tokenSymbol, limit],
+  );
+
+  return result.rows.map((row) => ({
+    address: String(row.address),
+    tokenSymbol,
+    balance: String(row.balance),
+    balanceNormalized:
+      row.balance_normalized !== null
+        ? String(row.balance_normalized)
+        : normalizeRawAmount(String(row.balance), Number(row.decimals ?? 0)),
+    label: row.label === null ? null : String(row.label),
+    metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+  }));
+}
+
 export async function getAvailableTokens(): Promise<string[]> {
   const result = await databasePool.query<{ token_symbol: string }>(
     `SELECT DISTINCT token_symbol
@@ -1731,7 +1818,12 @@ export async function getTokenMetadata(
 
 export async function getFullTokenGraph(
   tokenSymbol: string,
+  options: { includeTopHoldersLimit?: number } = {},
 ): Promise<AddressSubgraphResult> {
+  const includeTopHoldersLimit = Math.max(
+    0,
+    Math.floor(Number(options.includeTopHoldersLimit ?? 0) || 0),
+  );
   const edgesResult = await databasePool.query(
     `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
        FROM edges
@@ -1760,11 +1852,35 @@ export async function getFullTokenGraph(
       )
     : { rows: [] as QueryResultRow[] };
 
+  const nodes = nodesResult.rows.map(mapGraphNodeRow);
+
+  if (includeTopHoldersLimit > 0) {
+    const topHolderNodes = await getTopHolderGraphNodes(
+      tokenSymbol,
+      includeTopHoldersLimit,
+    );
+    const nodeMap = new Map(nodes.map((node) => [node.address, node]));
+
+    for (const node of topHolderNodes) {
+      if (!nodeMap.has(node.address)) {
+        nodeMap.set(node.address, node);
+      }
+    }
+
+    return {
+      tokenSymbol,
+      rootAddress: "",
+      depth: 0,
+      nodes: [...nodeMap.values()],
+      edges,
+    };
+  }
+
   return {
     tokenSymbol,
     rootAddress: "",
     depth: 0,
-    nodes: nodesResult.rows.map(mapGraphNodeRow),
+    nodes,
     edges,
   };
 }
