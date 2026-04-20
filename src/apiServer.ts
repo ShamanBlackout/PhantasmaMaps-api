@@ -269,12 +269,25 @@ app.get(
 app.get(
   "/graph/token/:tokenSymbol",
   (request: Request, response: Response, next) => {
-    const cacheKey = `token-graph:${String(request.params.tokenSymbol).toUpperCase()}`;
+    const includeTopHolders = Math.min(
+      readPositiveInt(String(request.query.includeTopHolders ?? ""), 0),
+      100,
+    );
+    const cacheKey = `token-graph:${String(request.params.tokenSymbol).toUpperCase()}:${includeTopHolders}`;
     cacheMiddleware(cacheKey, 1 * 60 * 1000)(request, response, next);
   },
   async (request: Request, response: Response) => {
     try {
-      const graph = await getFullTokenGraph(String(request.params.tokenSymbol));
+      const includeTopHolders = Math.min(
+        readPositiveInt(String(request.query.includeTopHolders ?? ""), 0),
+        100,
+      );
+      const graph = await getFullTokenGraph(
+        String(request.params.tokenSymbol),
+        {
+          includeTopHoldersLimit: includeTopHolders,
+        },
+      );
       response.json(graph);
     } catch (error: unknown) {
       response.status(500).json({
