@@ -1818,19 +1818,33 @@ export async function getTokenMetadata(
 
 export async function getFullTokenGraph(
   tokenSymbol: string,
-  options: { includeTopHoldersLimit?: number } = {},
+  options: { includeTopHoldersLimit?: number; edgeLimit?: number } = {},
 ): Promise<AddressSubgraphResult> {
   const includeTopHoldersLimit = Math.max(
     0,
     Math.floor(Number(options.includeTopHoldersLimit ?? 0) || 0),
   );
-  const edgesResult = await databasePool.query(
-    `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
-       FROM edges
-      WHERE token_symbol = $1
-      ORDER BY id ASC`,
-    [tokenSymbol],
-  );
+  const edgeLimit = Number.isFinite(Number(options.edgeLimit))
+    ? Math.max(0, Math.floor(Number(options.edgeLimit) || 0))
+    : 0;
+  const edgesQuery =
+    edgeLimit > 0
+      ? {
+          text: `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
+                   FROM edges
+                  WHERE token_symbol = $1
+                  ORDER BY id ASC
+                  LIMIT $2`,
+          values: [tokenSymbol, edgeLimit],
+        }
+      : {
+          text: `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
+                   FROM edges
+                  WHERE token_symbol = $1
+                  ORDER BY id ASC`,
+          values: [tokenSymbol],
+        };
+  const edgesResult = await databasePool.query(edgesQuery.text, edgesQuery.values);
 
   const edges = edgesResult.rows.map(mapGraphEdgeRow);
   const addressSet = new Set<string>();

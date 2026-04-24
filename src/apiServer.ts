@@ -94,7 +94,7 @@ export type ApiServerDeps = {
   getTopHoldersImpl: (tokenSymbol: string, limit: number) => Promise<unknown>;
   getFullTokenGraphImpl: (
     tokenSymbol: string,
-    options: { includeTopHoldersLimit: number },
+    options: { includeTopHoldersLimit: number; edgeLimit?: number },
   ) => Promise<unknown>;
   getTransactionsPageImpl: typeof getTransactionsPage;
   getAddressActivityImpl: (
@@ -308,10 +308,12 @@ async function sendTokenGraphResponse(
   deps: ApiServerDeps,
   tokenSymbol: string,
   includeTopHolders: number,
+  edgeLimit?: number,
   mode: "standard" | "max" = "standard",
 ): Promise<void> {
   const graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
     includeTopHoldersLimit: includeTopHolders,
+    edgeLimit,
   });
   const graphNodes = Array.isArray((graph as { nodes?: unknown[] })?.nodes)
     ? ((graph as { nodes?: unknown[] }).nodes ?? [])
@@ -325,6 +327,7 @@ async function sendTokenGraphResponse(
     mode,
     appliedLimits: {
       topHoldersLimit: includeTopHolders,
+      edgeLimit: Number.isFinite(Number(edgeLimit)) ? edgeLimit : null,
     },
     totalNodeCount: graphNodes.length,
     totalEdgeCount: graphEdges.length,
@@ -670,6 +673,7 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           deps,
           tokenSymbol,
           0,
+          undefined,
           "max",
         );
       } catch (error: unknown) {
@@ -714,6 +718,7 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           deps,
           tokenSymbol,
           includeTopHolders,
+          apiConfig.tokenGraphMaxEdges,
           "standard",
         );
       } catch (error: unknown) {
