@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import request from "supertest";
 import { createApiApp, type ApiServerDeps } from "./apiServer";
+import { apiConfig } from "./phantasma.config";
 
 function noCache() {
   return (_request: unknown, _response: unknown, next: () => void) => next();
@@ -102,6 +103,10 @@ test("GET /graph/token/:tokenSymbol accepts withTopHolders=true", async () => {
 
   assert.equal(response.status, 200);
   assert.equal(response.body?.meta?.appliedLimits?.topHoldersLimit, 10);
+  assert.equal(
+    response.body?.meta?.appliedLimits?.edgeLimit,
+    apiConfig.tokenGraphMaxEdges,
+  );
 });
 
 test("GET /graph/token/:tokenSymbol accepts topHoldersLimit override", async () => {
@@ -112,6 +117,10 @@ test("GET /graph/token/:tokenSymbol accepts topHoldersLimit override", async () 
 
   assert.equal(response.status, 200);
   assert.equal(response.body?.meta?.appliedLimits?.topHoldersLimit, 25);
+  assert.equal(
+    response.body?.meta?.appliedLimits?.edgeLimit,
+    apiConfig.tokenGraphMaxEdges,
+  );
   assert.equal(response.body?.meta?.totalNodeCount, 0);
   assert.equal(response.body?.meta?.totalEdgeCount, 0);
 });
@@ -123,6 +132,40 @@ test("GET /graph/token/:tokenSymbol/max returns dedicated max mode graph", async
   assert.equal(response.status, 200);
   assert.equal(response.body?.meta?.mode, "max");
   assert.equal(response.body?.meta?.appliedLimits?.topHoldersLimit, 0);
+  assert.equal(response.body?.meta?.appliedLimits?.edgeLimit, null);
+  assert.equal(response.body?.meta?.totalNodeCount, 0);
+  assert.equal(response.body?.meta?.totalEdgeCount, 0);
+});
+
+test("GET /graph/token/:tokenSymbol degrades to smaller graph when primary query fails", async () => {
+  const deps = createDeps();
+  let callCount = 0;
+  deps.getFullTokenGraphImpl = async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      throw new Error("temporary graph failure");
+    }
+
+    return {
+      totalSupply: 1000,
+      nodes: [],
+      edges: [],
+    };
+  };
+
+  const app = createApiApp(deps);
+  const response = await request(app).get(
+    "/graph/token/KCAL?topHoldersLimit=25",
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body?.meta?.isPartial, true);
+  assert.equal(response.body?.meta?.appliedLimits?.topHoldersLimit, 0);
+  assert.equal(response.body?.meta?.degradedFrom?.topHoldersLimit, 25);
+  assert.equal(
+    response.body?.meta?.degradedFrom?.edgeLimit,
+    apiConfig.tokenGraphMaxEdges,
+  );
   assert.equal(response.body?.meta?.totalNodeCount, 0);
   assert.equal(response.body?.meta?.totalEdgeCount, 0);
 });

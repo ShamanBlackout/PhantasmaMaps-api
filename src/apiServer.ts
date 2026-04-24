@@ -94,7 +94,7 @@ export type ApiServerDeps = {
   getTopHoldersImpl: (tokenSymbol: string, limit: number) => Promise<unknown>;
   getFullTokenGraphImpl: (
     tokenSymbol: string,
-    options: { includeTopHoldersLimit: number },
+    options: { includeTopHoldersLimit: number; edgeLimit?: number },
   ) => Promise<unknown>;
   getTransactionsPageImpl: typeof getTransactionsPage;
   getAddressActivityImpl: (
@@ -130,6 +130,15 @@ function readPositiveInt(value: string | undefined, fallback: number): number {
 
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function ensurePositiveEdgeLimit(value: number | undefined): number {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+
+  return apiConfig.tokenGraphMaxEdges;
 }
 
 function readOptionalNumber(value: string | undefined): number | undefined {
@@ -308,11 +317,42 @@ async function sendTokenGraphResponse(
   deps: ApiServerDeps,
   tokenSymbol: string,
   includeTopHolders: number,
+  edgeLimit?: number,
   mode: "standard" | "max" = "standard",
 ): Promise<void> {
-  const graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
-    includeTopHoldersLimit: includeTopHolders,
-  });
+  const effectiveEdgeLimit =
+    mode === "standard" ? ensurePositiveEdgeLimit(edgeLimit) : undefined;
+
+  let graph: unknown;
+  let fallbackApplied = false;
+  let appliedTopHoldersLimit = includeTopHolders;
+  let appliedEdgeLimit = effectiveEdgeLimit;
+
+  try {
+    graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
+      includeTopHoldersLimit: includeTopHolders,
+      edgeLimit: effectiveEdgeLimit,
+    });
+  } catch (primaryError) {
+    if (mode !== "standard") {
+      throw primaryError;
+    }
+
+    const fallbackEdgeLimit = Math.max(
+      200,
+      Math.floor(
+        Number(effectiveEdgeLimit ?? apiConfig.tokenGraphMaxEdges) / 2,
+      ),
+    );
+    graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
+      includeTopHoldersLimit: 0,
+      edgeLimit: fallbackEdgeLimit,
+    });
+    fallbackApplied = true;
+    appliedTopHoldersLimit = 0;
+    appliedEdgeLimit = fallbackEdgeLimit;
+  }
+
   const graphNodes = Array.isArray((graph as { nodes?: unknown[] })?.nodes)
     ? ((graph as { nodes?: unknown[] }).nodes ?? [])
     : [];
@@ -321,11 +361,24 @@ async function sendTokenGraphResponse(
     : [];
 
   sendSuccess(request, response, graph, {
-    isPartial: false,
+    isPartial: fallbackApplied,
     mode,
     appliedLimits: {
-      topHoldersLimit: includeTopHolders,
+      topHoldersLimit: appliedTopHoldersLimit,
+      edgeLimit:
+        mode === "standard"
+          ? appliedEdgeLimit
+          : Number.isFinite(Number(edgeLimit))
+            ? edgeLimit
+            : null,
     },
+    degradedFrom:
+      fallbackApplied && mode === "standard"
+        ? {
+            topHoldersLimit: includeTopHolders,
+            edgeLimit: effectiveEdgeLimit,
+          }
+        : null,
     totalNodeCount: graphNodes.length,
     totalEdgeCount: graphEdges.length,
   });
@@ -670,6 +723,7 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           deps,
           tokenSymbol,
           0,
+          undefined,
           "max",
         );
       } catch (error: unknown) {
@@ -714,6 +768,7 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           deps,
           tokenSymbol,
           includeTopHolders,
+          apiConfig.tokenGraphMaxEdges,
           "standard",
         );
       } catch (error: unknown) {

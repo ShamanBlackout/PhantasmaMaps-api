@@ -97,6 +97,7 @@ export interface TokenMetadataRecord {
   tokenSymbol: string;
   name: string | null;
   decimals: number;
+  holderCount: number;
   currentSupplyRaw: string;
   currentSupplyNormalized: string;
   maxSupplyRaw: string | null;

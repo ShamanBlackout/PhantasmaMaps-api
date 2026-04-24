@@ -412,6 +412,7 @@ function mapTokenMetadataRow(row: QueryResultRow): TokenMetadataRecord {
     tokenSymbol: String(row.token_symbol),
     name: row.name === null ? null : String(row.name),
     decimals: Number(row.decimals),
+    holderCount: Number(row.holder_count ?? 0),
     currentSupplyRaw: String(row.current_supply_raw),
     currentSupplyNormalized: String(row.current_supply_normalized),
     maxSupplyRaw:
@@ -1797,6 +1798,11 @@ export async function getTokenMetadata(
     `SELECT token_symbol,
             name,
             decimals,
+            (
+              SELECT COUNT(1)
+                FROM nodes
+               WHERE token_symbol = tm.token_symbol
+            )::bigint AS holder_count,
             current_supply_raw,
             current_supply_normalized,
             max_supply_raw,
@@ -1804,7 +1810,7 @@ export async function getTokenMetadata(
             flags,
             metadata,
             updated_at
-       FROM token_metadata
+       FROM token_metadata tm
       WHERE token_symbol = $1`,
     [tokenSymbol],
   );
@@ -1818,18 +1824,35 @@ export async function getTokenMetadata(
 
 export async function getFullTokenGraph(
   tokenSymbol: string,
-  options: { includeTopHoldersLimit?: number } = {},
+  options: { includeTopHoldersLimit?: number; edgeLimit?: number } = {},
 ): Promise<AddressSubgraphResult> {
   const includeTopHoldersLimit = Math.max(
     0,
     Math.floor(Number(options.includeTopHoldersLimit ?? 0) || 0),
   );
+  const edgeLimit = Number.isFinite(Number(options.edgeLimit))
+    ? Math.max(0, Math.floor(Number(options.edgeLimit) || 0))
+    : 0;
+  const edgesQuery =
+    edgeLimit > 0
+      ? {
+          text: `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
+                   FROM edges
+                  WHERE token_symbol = $1
+                  ORDER BY id ASC
+                  LIMIT $2`,
+          values: [tokenSymbol, edgeLimit],
+        }
+      : {
+          text: `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
+                   FROM edges
+                  WHERE token_symbol = $1
+                  ORDER BY id ASC`,
+          values: [tokenSymbol],
+        };
   const edgesResult = await databasePool.query(
-    `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
-       FROM edges
-      WHERE token_symbol = $1
-      ORDER BY id ASC`,
-    [tokenSymbol],
+    edgesQuery.text,
+    edgesQuery.values,
   );
 
   const edges = edgesResult.rows.map(mapGraphEdgeRow);
