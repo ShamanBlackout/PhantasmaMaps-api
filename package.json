@@ -8,15 +8,16 @@
   },
   "scripts": {
     "start": "npm run api",
-    "build": "node node_modules/esbuild/bin/esbuild src/apiServer.ts --bundle --platform=node --target=node22 --outfile=dist/apiServer.js --external:pg-native",
-    "start:prod": "node dist/apiServer.js",
-    "api": "node ./node_modules/tsx/dist/cli.mjs src/apiServer.ts",
+    "build": "node node_modules/esbuild/bin/esbuild src/startApiServer.ts --bundle --platform=node --target=node22 --outfile=dist/startApiServer.js --external:pg-native",
+    "start:prod": "node dist/startApiServer.js",
+    "api": "node ./node_modules/tsx/dist/cli.mjs src/startApiServer.ts",
     "backfill": "node ./node_modules/tsx/dist/cli.mjs src/backfill.ts",
     "backfill:dry-run": "node ./node_modules/tsx/dist/cli.mjs src/backfillDryRun.ts",
     "sync": "node ./node_modules/tsx/dist/cli.mjs src/syncIncremental.ts",
     "sync:nodes-normalized": "node ./node_modules/tsx/dist/cli.mjs src/syncNodeBalancesNormalized.ts",
     "find-first-transfer": "node ./node_modules/tsx/dist/cli.mjs src/findFirstTransferBlock.ts",
     "check": "tsc --noEmit",
+    "test:contract": "node ./node_modules/tsx/dist/cli.mjs --test src/**/*.contract.test.ts",
     "test:rpc": "node ./node_modules/tsx/dist/cli.mjs src/connectPhantasma.ts",
     "test:db-snapshot": "node ./node_modules/tsx/dist/cli.mjs src/testDatabaseInserts.ts",
     "cleanup:claims": "node ./node_modules/tsx/dist/cli.mjs src/cleanupBlockClaims.ts"
@@ -34,6 +35,8 @@
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
     "@types/pg": "^8.20.0",
+    "@types/supertest": "^6.0.3",
+    "supertest": "^7.1.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }
