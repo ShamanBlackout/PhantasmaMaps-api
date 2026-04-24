@@ -412,6 +412,7 @@ function mapTokenMetadataRow(row: QueryResultRow): TokenMetadataRecord {
     tokenSymbol: String(row.token_symbol),
     name: row.name === null ? null : String(row.name),
     decimals: Number(row.decimals),
+    holderCount: Number(row.holder_count ?? 0),
     currentSupplyRaw: String(row.current_supply_raw),
     currentSupplyNormalized: String(row.current_supply_normalized),
     maxSupplyRaw:
@@ -1797,6 +1798,11 @@ export async function getTokenMetadata(
     `SELECT token_symbol,
             name,
             decimals,
+            (
+              SELECT COUNT(1)
+                FROM nodes
+               WHERE token_symbol = tm.token_symbol
+            )::bigint AS holder_count,
             current_supply_raw,
             current_supply_normalized,
             max_supply_raw,
@@ -1804,7 +1810,7 @@ export async function getTokenMetadata(
             flags,
             metadata,
             updated_at
-       FROM token_metadata
+       FROM token_metadata tm
       WHERE token_symbol = $1`,
     [tokenSymbol],
   );
@@ -1844,7 +1850,10 @@ export async function getFullTokenGraph(
                   ORDER BY id ASC`,
           values: [tokenSymbol],
         };
-  const edgesResult = await databasePool.query(edgesQuery.text, edgesQuery.values);
+  const edgesResult = await databasePool.query(
+    edgesQuery.text,
+    edgesQuery.values,
+  );
 
   const edges = edgesResult.rows.map(mapGraphEdgeRow);
   const addressSet = new Set<string>();

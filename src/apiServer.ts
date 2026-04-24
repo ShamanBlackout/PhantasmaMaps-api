@@ -132,6 +132,15 @@ function readPositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function ensurePositiveEdgeLimit(value: number | undefined): number {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+
+  return apiConfig.tokenGraphMaxEdges;
+}
+
 function readOptionalNumber(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
@@ -311,10 +320,39 @@ async function sendTokenGraphResponse(
   edgeLimit?: number,
   mode: "standard" | "max" = "standard",
 ): Promise<void> {
-  const graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
-    includeTopHoldersLimit: includeTopHolders,
-    edgeLimit,
-  });
+  const effectiveEdgeLimit =
+    mode === "standard" ? ensurePositiveEdgeLimit(edgeLimit) : undefined;
+
+  let graph: unknown;
+  let fallbackApplied = false;
+  let appliedTopHoldersLimit = includeTopHolders;
+  let appliedEdgeLimit = effectiveEdgeLimit;
+
+  try {
+    graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
+      includeTopHoldersLimit: includeTopHolders,
+      edgeLimit: effectiveEdgeLimit,
+    });
+  } catch (primaryError) {
+    if (mode !== "standard") {
+      throw primaryError;
+    }
+
+    const fallbackEdgeLimit = Math.max(
+      200,
+      Math.floor(
+        Number(effectiveEdgeLimit ?? apiConfig.tokenGraphMaxEdges) / 2,
+      ),
+    );
+    graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
+      includeTopHoldersLimit: 0,
+      edgeLimit: fallbackEdgeLimit,
+    });
+    fallbackApplied = true;
+    appliedTopHoldersLimit = 0;
+    appliedEdgeLimit = fallbackEdgeLimit;
+  }
+
   const graphNodes = Array.isArray((graph as { nodes?: unknown[] })?.nodes)
     ? ((graph as { nodes?: unknown[] }).nodes ?? [])
     : [];
@@ -323,12 +361,24 @@ async function sendTokenGraphResponse(
     : [];
 
   sendSuccess(request, response, graph, {
-    isPartial: false,
+    isPartial: fallbackApplied,
     mode,
     appliedLimits: {
-      topHoldersLimit: includeTopHolders,
-      edgeLimit: Number.isFinite(Number(edgeLimit)) ? edgeLimit : null,
+      topHoldersLimit: appliedTopHoldersLimit,
+      edgeLimit:
+        mode === "standard"
+          ? appliedEdgeLimit
+          : Number.isFinite(Number(edgeLimit))
+            ? edgeLimit
+            : null,
     },
+    degradedFrom:
+      fallbackApplied && mode === "standard"
+        ? {
+            topHoldersLimit: includeTopHolders,
+            edgeLimit: effectiveEdgeLimit,
+          }
+        : null,
     totalNodeCount: graphNodes.length,
     totalEdgeCount: graphEdges.length,
   });

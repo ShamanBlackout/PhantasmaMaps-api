@@ -11,6 +11,17 @@ function readNumber(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function readPositiveNumber(name: string, fallback: number): number {
+  const rawValue = process.env[name];
+
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function readBoolean(name: string, fallback: boolean): boolean {
   const rawValue = process.env[name];
 
@@ -86,7 +97,10 @@ export const apiConfig = {
     "PHANTASMA_GRAPH_MAX_EDGES_PER_REQUEST",
     1200,
   ),
-  tokenGraphMaxEdges: readNumber("PHANTASMA_TOKEN_GRAPH_MAX_EDGES", 5000),
+  tokenGraphMaxEdges: readPositiveNumber(
+    "PHANTASMA_TOKEN_GRAPH_MAX_EDGES",
+    1200,
+  ),
   transactionPageSizeDefault: readNumber("PHANTASMA_TX_PAGE_SIZE", 50),
   transactionPageSizeMax: readNumber("PHANTASMA_TX_PAGE_SIZE_MAX", 250),
 } as const;
