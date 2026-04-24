@@ -1828,9 +1828,8 @@ export async function getFullTokenGraph(
     `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
        FROM edges
       WHERE token_symbol = $1
-      ORDER BY id ASC
-      LIMIT $2`,
-    [tokenSymbol, apiConfig.tokenGraphMaxEdges],
+      ORDER BY id ASC`,
+    [tokenSymbol],
   );
 
   const edges = edgesResult.rows.map(mapGraphEdgeRow);
