@@ -109,6 +109,25 @@ test("GET /graph/token/:tokenSymbol accepts withTopHolders=true", async () => {
   );
 });
 
+test("GET /graph/token/:tokenSymbol accepts single-character symbols", async () => {
+  const deps = createDeps();
+  let receivedTokenSymbol = "";
+  deps.getFullTokenGraphImpl = async (tokenSymbol: string) => {
+    receivedTokenSymbol = tokenSymbol;
+    return {
+      totalSupply: 1000,
+      nodes: [],
+      edges: [],
+    };
+  };
+
+  const app = createApiApp(deps);
+  const response = await request(app).get("/graph/token/D");
+
+  assert.equal(response.status, 200);
+  assert.equal(receivedTokenSymbol, "D");
+});
+
 test("GET /graph/token/:tokenSymbol accepts topHoldersLimit override", async () => {
   const app = createApiApp(createDeps());
   const response = await request(app).get(
