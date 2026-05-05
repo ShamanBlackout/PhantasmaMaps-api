@@ -176,7 +176,7 @@ function clampInt(value: number, min: number, max: number): number {
 
 function isValidTokenSymbol(rawToken: string): boolean {
   const token = String(rawToken || "").trim();
-  return /^[A-Z0-9_-]{2,16}$/i.test(token);
+  return /^[A-Z0-9_-]{1,16}$/i.test(token);
 }
 
 function isValidAddress(rawAddress: string): boolean {
