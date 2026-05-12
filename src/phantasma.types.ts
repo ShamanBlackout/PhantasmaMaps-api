@@ -93,6 +93,36 @@ export interface AddressActivityResult {
   items: ActivityBucket[];
 }
 
+export interface TokenDailyMetricsRecord {
+  tokenSymbol: string;
+  bucketDate: string;
+  holderCount: number;
+  newHolderCount: number;
+  lostHolderCount: number;
+  activeWalletCount: number;
+  transactionCount: number;
+  transferVolume: number;
+  currentSupply: number;
+  top10Share: number;
+  top50Share: number;
+  topWalletShare: number;
+  giniCoefficient: number;
+  medianTransferAmount: number;
+  avgTransferAmount: number;
+  updatedAt: Date | null;
+}
+
+export interface TokenTopMoverRecord {
+  tokenSymbol: string;
+  address: string;
+  latestDate: string;
+  baselineDate: string;
+  latestBalance: number;
+  baselineBalance: number;
+  deltaBalance: number;
+  deltaPct: number;
+}
+
 export interface TokenMetadataRecord {
   tokenSymbol: string;
   name: string | null;

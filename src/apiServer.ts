@@ -12,6 +12,8 @@ import { cacheMiddleware, invalidateCache } from "./responseCache";
 import {
   clearSubgraphCache,
   closeDatabasePool,
+  getTokenDailyMetrics,
+  getTokenTopMovers,
   getAddressActivity,
   getAddressConnections,
   getAddressSubgraph,
@@ -22,6 +24,7 @@ import {
   getTokenMetadata,
   getTopHolders,
   getTransactionsPage,
+  refreshTokenAnalyticsForDate,
   testDatabaseConnection,
 } from "./database";
 import type { Server } from "http";
@@ -102,6 +105,19 @@ export type ApiServerDeps = {
     address: string,
     days: number,
   ) => Promise<unknown[]>;
+  refreshTokenAnalyticsForDateImpl: (
+    tokenSymbol: string,
+    bucketDate?: Date,
+  ) => Promise<void>;
+  getTokenDailyMetricsImpl: (
+    tokenSymbol: string,
+    days: number,
+  ) => Promise<unknown[]>;
+  getTokenTopMoversImpl: (
+    tokenSymbol: string,
+    windowDays: number,
+    limit: number,
+  ) => Promise<unknown[]>;
 };
 
 const defaultDeps: ApiServerDeps = {
@@ -121,6 +137,9 @@ const defaultDeps: ApiServerDeps = {
   getFullTokenGraphImpl: getFullTokenGraph,
   getTransactionsPageImpl: getTransactionsPage,
   getAddressActivityImpl: getAddressActivity,
+  refreshTokenAnalyticsForDateImpl: refreshTokenAnalyticsForDate,
+  getTokenDailyMetricsImpl: getTokenDailyMetrics,
+  getTokenTopMoversImpl: getTokenTopMovers,
 };
 
 function readPositiveInt(value: string | undefined, fallback: number): number {
@@ -157,6 +176,20 @@ function readOptionalIsoDate(value: string | undefined): Date | undefined {
 
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date : undefined;
+}
+
+function readOptionalBucketDate(value: string | undefined): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const trimmed = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const parsed = new Date(`${trimmed}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) ? parsed : undefined;
 }
 
 function readStringList(value: string | undefined): string[] {
@@ -947,6 +980,143 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           days,
         );
         sendSuccess(request, response, { tokenSymbol, address, days, items });
+      } catch (error: unknown) {
+        handleRouteError(response, error);
+      }
+    },
+  );
+
+  app.post(
+    "/analytics/tokens/:tokenSymbol/refresh",
+    async (request: Request, response: Response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol },
+          );
+        }
+
+        const bucketDate = readOptionalBucketDate(
+          request.query.date ? String(request.query.date) : undefined,
+        );
+
+        if (request.query.date && !bucketDate) {
+          throw new ApiError(
+            400,
+            "INVALID_REQUEST",
+            "date must be in YYYY-MM-DD format",
+            {
+              date: String(request.query.date),
+            },
+          );
+        }
+
+        await deps.refreshTokenAnalyticsForDateImpl(tokenSymbol, bucketDate);
+        sendSuccess(request, response, {
+          ok: true,
+          tokenSymbol,
+          bucketDate:
+            bucketDate?.toISOString().slice(0, 10) ||
+            new Date().toISOString().slice(0, 10),
+        });
+      } catch (error: unknown) {
+        handleRouteError(response, error);
+      }
+    },
+  );
+
+  app.get(
+    "/analytics/tokens/:tokenSymbol/timeseries",
+    async (request: Request, response: Response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol },
+          );
+        }
+
+        const days = Math.min(
+          readPositiveInt(
+            request.query.days ? String(request.query.days) : undefined,
+            90,
+          ),
+          3650,
+        );
+
+        if (
+          String(request.query.refresh ?? "")
+            .trim()
+            .toLowerCase() === "true"
+        ) {
+          await deps.refreshTokenAnalyticsForDateImpl(tokenSymbol);
+        }
+
+        const items = await deps.getTokenDailyMetricsImpl(tokenSymbol, days);
+        sendSuccess(request, response, { tokenSymbol, days, items });
+      } catch (error: unknown) {
+        handleRouteError(response, error);
+      }
+    },
+  );
+
+  app.get(
+    "/analytics/tokens/:tokenSymbol/top-movers",
+    async (request: Request, response: Response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol },
+          );
+        }
+
+        const windowDays = Math.min(
+          readPositiveInt(
+            request.query.windowDays
+              ? String(request.query.windowDays)
+              : undefined,
+            7,
+          ),
+          365,
+        );
+        const limit = Math.min(
+          readPositiveInt(
+            request.query.limit ? String(request.query.limit) : undefined,
+            20,
+          ),
+          200,
+        );
+
+        if (
+          String(request.query.refresh ?? "")
+            .trim()
+            .toLowerCase() === "true"
+        ) {
+          await deps.refreshTokenAnalyticsForDateImpl(tokenSymbol);
+        }
+
+        const items = await deps.getTokenTopMoversImpl(
+          tokenSymbol,
+          windowDays,
+          limit,
+        );
+        sendSuccess(request, response, {
+          tokenSymbol,
+          windowDays,
+          limit,
+          items,
+        });
       } catch (error: unknown) {
         handleRouteError(response, error);
       }

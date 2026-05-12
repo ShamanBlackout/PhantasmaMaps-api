@@ -63,6 +63,9 @@ function createDeps(): ApiServerDeps {
       pageSize: 50,
     }),
     getAddressActivityImpl: async () => [],
+    refreshTokenAnalyticsForDateImpl: async () => {},
+    getTokenDailyMetricsImpl: async () => [],
+    getTokenTopMoversImpl: async () => [],
   };
 }
 
@@ -187,4 +190,76 @@ test("GET /graph/token/:tokenSymbol degrades to smaller graph when primary query
   );
   assert.equal(response.body?.meta?.totalNodeCount, 0);
   assert.equal(response.body?.meta?.totalEdgeCount, 0);
+});
+
+test("POST /analytics/tokens/:tokenSymbol/refresh validates date format", async () => {
+  const app = createApiApp(createDeps());
+  const response = await request(app).post(
+    "/analytics/tokens/SOUL/refresh?date=2026/01/01",
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body?.error?.code, "INVALID_REQUEST");
+});
+
+test("GET /analytics/tokens/:tokenSymbol/timeseries returns envelope", async () => {
+  const deps = createDeps();
+  deps.getTokenDailyMetricsImpl = async () => [
+    {
+      tokenSymbol: "SOUL",
+      bucketDate: "2026-05-10",
+      holderCount: 10,
+      newHolderCount: 2,
+      lostHolderCount: 1,
+      activeWalletCount: 7,
+      transactionCount: 15,
+      transferVolume: 125.5,
+      currentSupply: 1000,
+      top10Share: 42.5,
+      top50Share: 88.2,
+      topWalletShare: 13.7,
+      giniCoefficient: 0.62,
+      medianTransferAmount: 3.1,
+      avgTransferAmount: 8.4,
+      updatedAt: new Date().toISOString(),
+    },
+  ];
+
+  const app = createApiApp(deps);
+  const response = await request(app).get(
+    "/analytics/tokens/SOUL/timeseries?days=30",
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body?.data?.tokenSymbol, "SOUL");
+  assert.equal(response.body?.data?.days, 30);
+  assert.equal(Array.isArray(response.body?.data?.items), true);
+  assert.equal(response.body?.data?.items?.length, 1);
+});
+
+test("GET /analytics/tokens/:tokenSymbol/top-movers returns envelope", async () => {
+  const deps = createDeps();
+  deps.getTokenTopMoversImpl = async () => [
+    {
+      tokenSymbol: "SOUL",
+      address: "P2Kexample",
+      latestDate: "2026-05-10",
+      baselineDate: "2026-05-03",
+      latestBalance: 100,
+      baselineBalance: 70,
+      deltaBalance: 30,
+      deltaPct: 42.857,
+    },
+  ];
+
+  const app = createApiApp(deps);
+  const response = await request(app).get(
+    "/analytics/tokens/SOUL/top-movers?windowDays=7&limit=5",
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body?.data?.tokenSymbol, "SOUL");
+  assert.equal(response.body?.data?.windowDays, 7);
+  assert.equal(response.body?.data?.limit, 5);
+  assert.equal(Array.isArray(response.body?.data?.items), true);
 });
