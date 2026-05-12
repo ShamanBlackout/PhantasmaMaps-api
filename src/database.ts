@@ -713,6 +713,46 @@ export async function getExhaustedBlockSyncClaims(
   }));
 }
 
+export async function requeueExhaustedBlockSyncClaims(
+  startHeight: number,
+  endHeight: number,
+  maxAttempts: number,
+  limit: number,
+): Promise<number> {
+  const result = await databasePool.query<{ count: string }>(
+    `WITH exhausted AS (
+       SELECT block_height
+         FROM block_sync_claims
+        WHERE block_height BETWEEN $1 AND $2
+          AND status = 'failed'
+          AND attempt_count >= $3
+        ORDER BY block_height ASC
+        LIMIT $4
+     ),
+     updated AS (
+       UPDATE block_sync_claims claims
+          SET status = 'pending',
+              claimed_by = NULL,
+              claimed_at = NULL,
+              updated_at = NOW(),
+              attempt_count = 0,
+              error = COALESCE(claims.error, 'exhausted claim requeued')
+         FROM exhausted
+        WHERE claims.block_height = exhausted.block_height
+      RETURNING 1
+     )
+     SELECT COUNT(*)::text AS count FROM updated`,
+    [
+      startHeight,
+      endHeight,
+      Math.max(1, Math.floor(maxAttempts)),
+      Math.max(1, Math.floor(limit)),
+    ],
+  );
+
+  return Number(result.rows[0]?.count ?? 0);
+}
+
 export async function getBlockSyncClaimsView(options?: {
   statuses?: string[];
   fromBlock?: number;
