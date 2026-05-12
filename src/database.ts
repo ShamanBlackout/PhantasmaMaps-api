@@ -753,6 +753,62 @@ export async function requeueExhaustedBlockSyncClaims(
   return Number(result.rows[0]?.count ?? 0);
 }
 
+export async function recoverCommitGapBlockClaim(
+  maxClaimAgeSeconds: number,
+): Promise<number | null> {
+  const result = await databasePool.query<{ block_height: string }>(
+    `WITH current_state AS (
+       SELECT COALESCE(
+                (
+                  SELECT last_block_height
+                    FROM sync_state
+                   WHERE token_symbol = $1
+                ),
+                0::bigint
+              ) AS last_height
+     ),
+     gap_claim AS (
+       SELECT claims.block_height,
+              claims.status,
+              claims.claimed_at
+         FROM block_sync_claims claims, current_state
+        WHERE claims.block_height = current_state.last_height + 1
+        LIMIT 1
+     ),
+     updated AS (
+       UPDATE block_sync_claims claims
+          SET status = 'pending',
+              claimed_by = NULL,
+              claimed_at = NULL,
+              updated_at = NOW(),
+              attempt_count = CASE
+                WHEN claims.status = 'failed' THEN 0
+                ELSE claims.attempt_count
+              END,
+              error = COALESCE(claims.error, 'commit gap claim requeued')
+         FROM gap_claim
+        WHERE claims.block_height = gap_claim.block_height
+          AND (
+            gap_claim.status = 'failed'
+            OR (
+              gap_claim.status = 'claimed'
+              AND gap_claim.claimed_at IS NOT NULL
+              AND gap_claim.claimed_at < NOW() - make_interval(secs => $2)
+            )
+          )
+      RETURNING claims.block_height::text AS block_height
+     )
+     SELECT block_height FROM updated`,
+    [CHAIN_SYNC_TOKEN, Math.max(30, Math.floor(maxClaimAgeSeconds))],
+  );
+
+  if (result.rowCount === 0) {
+    return null;
+  }
+
+  return Number(result.rows[0].block_height);
+}
+
 export async function getBlockSyncClaimsView(options?: {
   statuses?: string[];
   fromBlock?: number;
