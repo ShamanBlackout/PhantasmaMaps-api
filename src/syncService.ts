@@ -636,8 +636,15 @@ async function runBlockRange(
             blockHeight,
             error instanceof Error ? error.message : String(error),
           );
-          failure = error;
-          return;
+
+          // A single block timeout/failure should not terminate the whole run.
+          // The claim row is marked failed and will be retried with backoff.
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          console.warn(
+            `Worker ${workerId} failed block ${blockHeight}; claim marked failed for retry. error=${errorMessage}`,
+          );
+          continue;
         }
       }
     })();
