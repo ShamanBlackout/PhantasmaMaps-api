@@ -9,6 +9,7 @@ import {
   getBlockSyncClaimWaitState,
   getExhaustedBlockSyncClaims,
   getChainSyncHeight,
+  requeueExhaustedBlockSyncClaims,
   resetStaleBlockSyncClaims,
   seedBlockSyncClaims,
   updateChainSyncHeight,
@@ -488,6 +489,14 @@ async function runBlockRange(
   );
 
   await seedBlockSyncClaims(startHeight, endHeight);
+  const resetAtStart = await resetStaleBlockSyncClaims(
+    syncConfig.claimStaleAfterSeconds,
+  );
+  if (resetAtStart > 0) {
+    console.warn(
+      `Reset ${resetAtStart} stale claimed block(s) to pending before sync run.`,
+    );
+  }
 
   const exhaustedClaims = await getExhaustedBlockSyncClaims(
     startHeight,
@@ -497,15 +506,14 @@ async function runBlockRange(
   );
 
   if (exhaustedClaims.length > 0) {
-    const summary = exhaustedClaims
-      .map(
-        (item) =>
-          `${item.blockHeight} (attempts=${item.attemptCount}${item.error ? `, error=${item.error}` : ""})`,
-      )
-      .join(", ");
-
-    throw new Error(
-      `Cannot continue sync because block claims exceeded retry limit (${syncConfig.claimMaxAttempts}): ${summary}`,
+    const requeuedCount = await requeueExhaustedBlockSyncClaims(
+      startHeight,
+      endHeight,
+      syncConfig.claimMaxAttempts,
+      500,
+    );
+    console.warn(
+      `Requeued ${requeuedCount} exhausted block claim(s) before sync run (maxAttempts=${syncConfig.claimMaxAttempts}).`,
     );
   }
 
@@ -533,6 +541,16 @@ async function runBlockRange(
         );
 
         if (blockHeight === null) {
+          const resetCount = await resetStaleBlockSyncClaims(
+            syncConfig.claimStaleAfterSeconds,
+          );
+          if (resetCount > 0) {
+            console.warn(
+              `Reset ${resetCount} stale claimed block(s) to pending during sync run.`,
+            );
+            continue;
+          }
+
           const exhaustedDuringRun = await getExhaustedBlockSyncClaims(
             startHeight,
             endHeight,
@@ -541,17 +559,17 @@ async function runBlockRange(
           );
 
           if (exhaustedDuringRun.length > 0) {
-            const summary = exhaustedDuringRun
-              .map(
-                (item) =>
-                  `${item.blockHeight} (attempts=${item.attemptCount}${item.error ? `, error=${item.error}` : ""})`,
-              )
-              .join(", ");
-
-            failure = new Error(
-              `Cannot continue sync because block claims exceeded retry limit (${syncConfig.claimMaxAttempts}): ${summary}`,
+            const requeuedCount = await requeueExhaustedBlockSyncClaims(
+              startHeight,
+              endHeight,
+              syncConfig.claimMaxAttempts,
+              500,
             );
-            return;
+            console.warn(
+              `Requeued ${requeuedCount} exhausted block claim(s) during sync run (maxAttempts=${syncConfig.claimMaxAttempts}).`,
+            );
+            await sleep(1000);
+            continue;
           }
 
           const waitState = await getBlockSyncClaimWaitState(
