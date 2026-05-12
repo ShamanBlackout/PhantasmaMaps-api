@@ -126,6 +126,9 @@ sql/migrations/005_nodes_balance_normalized.sql
 sql/migrations/006_edges_amount_normalized.sql
 sql/migrations/007_transactions_amount_normalized.sql
 sql/migrations/008_block_sync_claims.sql
+sql/migrations/009_performance_indexes.sql
+sql/migrations/010_address_connections.sql
+sql/migrations/011_analytics_daily.sql
 ```
 
 4. Start the API or one of the worker commands.
@@ -148,6 +151,9 @@ psql $env:DATABASE_URL -f .\sql/migrations/005_nodes_balance_normalized.sql
 psql $env:DATABASE_URL -f .\sql/migrations/006_edges_amount_normalized.sql
 psql $env:DATABASE_URL -f .\sql/migrations/007_transactions_amount_normalized.sql
 psql $env:DATABASE_URL -f .\sql/migrations/008_block_sync_claims.sql
+psql $env:DATABASE_URL -f .\sql/migrations/009_performance_indexes.sql
+psql $env:DATABASE_URL -f .\sql/migrations/010_address_connections.sql
+psql $env:DATABASE_URL -f .\sql/migrations/011_analytics_daily.sql
 ```
 
 Bash example:
@@ -162,7 +168,10 @@ for file in \
   sql/migrations/005_nodes_balance_normalized.sql \
   sql/migrations/006_edges_amount_normalized.sql \
   sql/migrations/007_transactions_amount_normalized.sql \
-  sql/migrations/008_block_sync_claims.sql; do
+  sql/migrations/008_block_sync_claims.sql \
+  sql/migrations/009_performance_indexes.sql \
+  sql/migrations/010_address_connections.sql \
+  sql/migrations/011_analytics_daily.sql; do
   psql "$DATABASE_URL" -f "$file"
 done
 ```
