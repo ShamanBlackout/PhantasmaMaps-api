@@ -9,6 +9,7 @@ import {
   getBlockSyncClaimWaitState,
   getExhaustedBlockSyncClaims,
   getChainSyncHeight,
+  recoverCommitGapBlockClaim,
   requeueExhaustedBlockSyncClaims,
   resetStaleBlockSyncClaims,
   seedBlockSyncClaims,
@@ -562,6 +563,16 @@ async function runBlockRange(
           if (resetCount > 0) {
             console.warn(
               `Reset ${resetCount} stale claimed block(s) to pending during sync run.`,
+            );
+            continue;
+          }
+
+          const recoveredGapBlock = await recoverCommitGapBlockClaim(
+            Math.max(60, Math.floor(syncConfig.claimStaleAfterSeconds / 4)),
+          );
+          if (Number.isFinite(recoveredGapBlock)) {
+            console.warn(
+              `Recovered commit-gap block ${recoveredGapBlock} for reclaim.`,
             );
             continue;
           }
