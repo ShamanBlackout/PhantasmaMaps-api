@@ -521,6 +521,8 @@ async function runBlockRange(
   const activeBlocks = new Map<number, number>();
   let commitQueue = Promise.resolve<number | null>(null);
   const commitFallbackHeight = startHeight - 1;
+  const staleClaimSweepIntervalMs = 30_000;
+  let lastStaleClaimSweepAt = Date.now();
   const touchedNodePairs = new Map<
     string,
     { address: string; tokenSymbol: string }
@@ -532,6 +534,19 @@ async function runBlockRange(
 
     return (async () => {
       while (failure === null) {
+        const now = Date.now();
+        if (now - lastStaleClaimSweepAt >= staleClaimSweepIntervalMs) {
+          lastStaleClaimSweepAt = now;
+          const resetCount = await resetStaleBlockSyncClaims(
+            syncConfig.claimStaleAfterSeconds,
+          );
+          if (resetCount > 0) {
+            console.warn(
+              `Periodic sweep reset ${resetCount} stale claimed block(s) to pending.`,
+            );
+          }
+        }
+
         const blockHeight = await claimNextBlockHeight(
           workerClaimId,
           syncConfig.claimMaxAttempts,
