@@ -2522,15 +2522,38 @@ export async function refreshTokenAnalyticsForDate(
          created_at,
          updated_at
        )
+       WITH balance_ledger AS (
+         SELECT
+           address,
+           SUM(delta) AS balance_normalized
+         FROM (
+           SELECT
+             to_address AS address,
+             COALESCE(amount_normalized, 0::numeric) AS delta
+           FROM transactions
+           WHERE token_symbol = $1
+             AND timestamp < (($2::date + INTERVAL '1 day'))::timestamp
+             AND COALESCE(to_address, '') <> ''
+           UNION ALL
+           SELECT
+             from_address AS address,
+             -COALESCE(amount_normalized, 0::numeric) AS delta
+           FROM transactions
+           WHERE token_symbol = $1
+             AND timestamp < (($2::date + INTERVAL '1 day'))::timestamp
+             AND COALESCE(from_address, '') <> ''
+         ) deltas
+         GROUP BY address
+       )
        SELECT
-         n.token_symbol,
-         n.address,
+         $1 AS token_symbol,
+         bl.address,
          $2::date AS bucket_date,
-         COALESCE(n.balance, 0::numeric) AS balance,
-         COALESCE(n.balance_normalized, n.balance, 0::numeric) AS balance_normalized,
+         COALESCE(bl.balance_normalized, 0::numeric) AS balance,
+         COALESCE(bl.balance_normalized, 0::numeric) AS balance_normalized,
          CASE
            WHEN COALESCE(tm.current_supply_normalized::numeric, 0::numeric) > 0
-             THEN (COALESCE(n.balance_normalized, n.balance, 0::numeric) / tm.current_supply_normalized::numeric) * 100::numeric
+             THEN (COALESCE(bl.balance_normalized, 0::numeric) / tm.current_supply_normalized::numeric) * 100::numeric
            ELSE 0::numeric
          END AS share_of_supply,
          NULL::text AS wallet_type,
@@ -2538,10 +2561,10 @@ export async function refreshTokenAnalyticsForDate(
          NULL::timestamp AS last_seen_at,
          NOW(),
          NOW()
-       FROM nodes n
+       FROM balance_ledger bl
        LEFT JOIN token_metadata tm
-         ON tm.token_symbol = n.token_symbol
-       WHERE n.token_symbol = $1`,
+         ON tm.token_symbol = $1
+       WHERE COALESCE(bl.balance_normalized, 0::numeric) > 0::numeric`,
       [tokenSymbol, normalizedBucketDate],
     );
 
@@ -2848,7 +2871,12 @@ export async function getTokenTopMovers(
            WHERE token_symbol = $1
              AND bucket_date <= (SELECT value FROM baseline_target)
          ),
-         (SELECT value FROM baseline_target)
+         (
+           SELECT MIN(bucket_date)
+           FROM wallet_daily_balances
+           WHERE token_symbol = $1
+             AND bucket_date < (SELECT value FROM latest_date)
+         )
        ) AS value
      ),
      latest_balances AS (
@@ -2879,8 +2907,10 @@ export async function getTokenTopMovers(
      FROM latest_balances l
      FULL OUTER JOIN baseline_balances b
        ON b.address = l.address
-     WHERE COALESCE(l.balance, 0::numeric) > 0::numeric
+     WHERE (SELECT value FROM baseline_date) IS NOT NULL
+       AND (COALESCE(l.balance, 0::numeric) > 0::numeric
         OR COALESCE(b.balance, 0::numeric) > 0::numeric
+       )
      ORDER BY ABS(COALESCE(l.balance, 0::numeric) - COALESCE(b.balance, 0::numeric)) DESC,
               COALESCE(l.address, b.address) ASC
      LIMIT $3`,
