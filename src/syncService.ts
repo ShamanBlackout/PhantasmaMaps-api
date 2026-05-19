@@ -16,6 +16,7 @@ import {
   updateChainSyncHeight,
   updateTrackedNodeBalances,
   updateTokenSyncStateForBlock,
+  refreshTokenAnalyticsForDate,
   upsertEdges,
   upsertAddressConnections,
   upsertNodes,
@@ -28,6 +29,44 @@ import { extractTransfersFromBlock } from "./transferParser";
 import type { TokenMetadataUpsertInput } from "./phantasma.types";
 
 const rpcClient = createPhantasmaRpcClient();
+
+function collectTouchedTokenDates(
+  transfers: Array<{ tokenSymbol: string; timestamp: Date }>,
+): Array<{ tokenSymbol: string; bucketDate: Date }> {
+  const seen = new Set<string>();
+  const touched: Array<{ tokenSymbol: string; bucketDate: Date }> = [];
+
+  for (const transfer of transfers) {
+    const tokenSymbol = String(transfer?.tokenSymbol || "").trim();
+    const timestamp = transfer?.timestamp;
+    if (!tokenSymbol || !(timestamp instanceof Date)) {
+      continue;
+    }
+
+    const ms = timestamp.getTime();
+    if (!Number.isFinite(ms)) {
+      continue;
+    }
+
+    const bucketDate = new Date(
+      Date.UTC(
+        timestamp.getUTCFullYear(),
+        timestamp.getUTCMonth(),
+        timestamp.getUTCDate(),
+      ),
+    );
+    const bucketKey = bucketDate.toISOString().slice(0, 10);
+    const key = `${tokenSymbol}:${bucketKey}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    touched.push({ tokenSymbol, bucketDate });
+  }
+
+  return touched;
+}
 
 function sleep(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
@@ -430,6 +469,7 @@ export async function processBlockHeight(
   const tokenMetadataBySymbol = new Map(
     tokenMetadata.map((item) => [item.tokenSymbol, item]),
   );
+  const touchedTokenDates = collectTouchedTokenDates(parsedBlock.transfers);
 
   await withDatabaseTransaction(async (client) => {
     if (tokenMetadata.length > 0) {
@@ -465,6 +505,10 @@ export async function processBlockHeight(
 
   if (options?.updateChainSyncState !== false) {
     await updateChainSyncHeight(parsedBlock.blockHeight);
+  }
+
+  for (const touched of touchedTokenDates) {
+    await refreshTokenAnalyticsForDate(touched.tokenSymbol, touched.bucketDate);
   }
 
   return {
