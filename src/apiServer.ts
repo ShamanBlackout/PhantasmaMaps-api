@@ -988,41 +988,13 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
 
   app.post(
     "/analytics/tokens/:tokenSymbol/refresh",
-    async (request: Request, response: Response) => {
+    async (_request: Request, response: Response) => {
       try {
-        const tokenSymbol = String(request.params.tokenSymbol).trim();
-        if (!isValidTokenSymbol(tokenSymbol)) {
-          throw new ApiError(
-            400,
-            "TOKEN_SYMBOL_INVALID",
-            "tokenSymbol path parameter is invalid",
-            { tokenSymbol },
-          );
-        }
-
-        const bucketDate = readOptionalBucketDate(
-          request.query.date ? String(request.query.date) : undefined,
+        throw new ApiError(
+          403,
+          "INVALID_REQUEST",
+          "Analytics refresh via POST is disabled",
         );
-
-        if (request.query.date && !bucketDate) {
-          throw new ApiError(
-            400,
-            "INVALID_REQUEST",
-            "date must be in YYYY-MM-DD format",
-            {
-              date: String(request.query.date),
-            },
-          );
-        }
-
-        await deps.refreshTokenAnalyticsForDateImpl(tokenSymbol, bucketDate);
-        sendSuccess(request, response, {
-          ok: true,
-          tokenSymbol,
-          bucketDate:
-            bucketDate?.toISOString().slice(0, 10) ||
-            new Date().toISOString().slice(0, 10),
-        });
       } catch (error: unknown) {
         handleRouteError(response, error);
       }
@@ -1050,14 +1022,6 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           ),
           3650,
         );
-
-        if (
-          String(request.query.refresh ?? "")
-            .trim()
-            .toLowerCase() === "true"
-        ) {
-          await deps.refreshTokenAnalyticsForDateImpl(tokenSymbol);
-        }
 
         const items = await deps.getTokenDailyMetricsImpl(tokenSymbol, days);
         sendSuccess(request, response, { tokenSymbol, days, items });
@@ -1097,14 +1061,6 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           ),
           200,
         );
-
-        if (
-          String(request.query.refresh ?? "")
-            .trim()
-            .toLowerCase() === "true"
-        ) {
-          await deps.refreshTokenAnalyticsForDateImpl(tokenSymbol);
-        }
 
         const items = await deps.getTokenTopMoversImpl(
           tokenSymbol,
