@@ -1,0 +1,618 @@
+{
+  "metadata": {
+    "generatedAt": "2026-05-27T00:30:02.938Z",
+    "labelSource": "heuristic_rubric_v1",
+    "labelVersion": null,
+    "tokenFilter": "SOUL",
+    "perLabel": 6,
+    "maxTotal": 40,
+    "windowDays": 7,
+    "historyDays": 30,
+    "minConfidence": 0.8,
+    "includeNormal": false,
+    "populationGroups": 4,
+    "sampleSize": 9
+  },
+  "population": [
+    {
+      "tokenSymbol": "SOUL",
+      "label": "distributor",
+      "count": 1
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "label": "high_outbound_activity",
+      "count": 1
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "label": "hub_receiver",
+      "count": 1
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "label": "router_service_like",
+      "count": 7
+    }
+  ],
+  "reviewItems": [
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2K6Ymuv5tCuz9DJD2GtcRXKDo5sAeKdinYDC71gWzXZe5t",
+      "label": "distributor",
+      "labelType": "distributor",
+      "labelConfidence": 0.89,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 0,
+        "outTxCount": 13,
+        "inUniqueCounterparties": 0,
+        "outUniqueCounterparties": 6,
+        "inVolume": 0,
+        "outVolume": 296144.92627828,
+        "inPercentRank": 0,
+        "outPercentRank": 0.9814126394052045,
+        "inZScoreLog": -0.36524905149925174,
+        "outZScoreLog": 3.6504779845795716,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 34,
+        "volumeWindow": 712466.08334828,
+        "topCounterparties": [
+          {
+            "totalVolume": 800000,
+            "counterparty": "P2KE5ESRUP6gx215vmFj9nEMtx5z2k64fkSJD5FYKM891aw",
+            "transactionCount": 4
+          },
+          {
+            "totalVolume": 784476,
+            "counterparty": "P2KDi8757gy75oCC52RgwwvfHP387ku4j5A6ocX6idDtWWS",
+            "transactionCount": 10
+          },
+          {
+            "totalVolume": 641815.52233,
+            "counterparty": "P2KKQBFNmxyD3vWMFFiV15m8w2bLgDBi4JQKm4b7wT8gxi7",
+            "transactionCount": 8
+          },
+          {
+            "totalVolume": 513640.93,
+            "counterparty": "P2KBDnYVZjSNtMZeSp1NF319xkCQ2o71LDcyoTd3g3JMVCv",
+            "transactionCount": 1
+          },
+          {
+            "totalVolume": 473583.84581,
+            "counterparty": "P2K6ku2DLrU7qmTqikjuHyK9u82SDZk7QpUSQ95zYTEeqqe",
+            "transactionCount": 14
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2K4gBGN4fTez9yonEsSWi8zqjasUyRSVoBMMvjahJGjg3Z",
+      "label": "high_outbound_activity",
+      "labelType": "outbound_activity",
+      "labelConfidence": 0.84,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 1,
+        "outTxCount": 88,
+        "inUniqueCounterparties": 1,
+        "outUniqueCounterparties": 2,
+        "inVolume": 525535,
+        "outVolume": 646097.76,
+        "inPercentRank": 0.8215613382899628,
+        "outPercentRank": 1,
+        "inZScoreLog": 0.5792861825965896,
+        "outZScoreLog": 7.22033852208818,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 124,
+        "volumeWindow": 1917368.51,
+        "topCounterparties": [
+          {
+            "totalVolume": 8894190.81550628,
+            "counterparty": "P2KAFdcNeDpYAXHmnBAhMZBS2AXv38UGpmiYoc2N32JzNmW",
+            "transactionCount": 3632
+          },
+          {
+            "totalVolume": 6942542.0338026,
+            "counterparty": "P2K9UTGhUSyzGKqQoxSscmkTGBFtBUGdDJrnmHNTHMxYTi3",
+            "transactionCount": 28
+          },
+          {
+            "totalVolume": 5619445.2354431,
+            "counterparty": "P2KF9XFpHBLJTzyUW7PioxHZCM55pEsFsUfLurfREWnm2sC",
+            "transactionCount": 15
+          },
+          {
+            "totalVolume": 4391209.98632132,
+            "counterparty": "P2KEnh7KqpLUUyUtyN6ZMCvHevBTNXY8TLYgaWmsLtzmUhC",
+            "transactionCount": 106
+          },
+          {
+            "totalVolume": 4162589.0532755,
+            "counterparty": "P2KKafK6YRsyQnKGoqKYnnvWFjD1DLHM8RXujTU3VBewBFF",
+            "transactionCount": 53
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2KJ52trcrygd8A4q9EFLG3yRtvbELmdHJMp5s4cgqmsyJn",
+      "label": "hub_receiver",
+      "labelType": "receiver",
+      "labelConfidence": 0.92,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 178,
+        "outTxCount": 0,
+        "inUniqueCounterparties": 178,
+        "outUniqueCounterparties": 0,
+        "inVolume": 193186.546,
+        "outVolume": 0,
+        "inPercentRank": 1,
+        "outPercentRank": 0,
+        "inZScoreLog": 6.703478635609193,
+        "outZScoreLog": -1.4431494911194451,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 179,
+        "volumeWindow": 243189.546,
+        "topCounterparties": [
+          {
+            "totalVolume": 3753261.0053,
+            "counterparty": "P2K3pjd8RokaqxrDrYzE5Ff4p14rkmGjFadpULuJjDVBWkA",
+            "transactionCount": 45
+          },
+          {
+            "totalVolume": 151043.6226,
+            "counterparty": "P2KEmLVgeFh4jWBuEKJKYoVzqWTtkD3SJBqhqJXLtVXBsLn",
+            "transactionCount": 7
+          },
+          {
+            "totalVolume": 53830.6755306,
+            "counterparty": "P2K7NbvzA7CyFjo7FNCCnNic5iDnAP3B9Ps8aH72KQEHY8X",
+            "transactionCount": 6
+          },
+          {
+            "totalVolume": 51053.6226,
+            "counterparty": "P2K8ZurUJ37c2Lht7E6W2hVdpcZCFQW8jgm4U8zfMU9Z39d",
+            "transactionCount": 5
+          },
+          {
+            "totalVolume": 51045.6226,
+            "counterparty": "P2KDBvKx4RnxoTMepjq3YyG2ssdp8LiGpDsioNnZ8cJ8TR5",
+            "transactionCount": 5
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2KAq7v8ZK1a2ZHttJg4iBh2z4K8fKDCwErwvSzUZJShkdn",
+      "label": "router_service_like",
+      "labelType": "router",
+      "labelConfidence": 0.95,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 12,
+        "outTxCount": 22,
+        "inUniqueCounterparties": 2,
+        "outUniqueCounterparties": 4,
+        "inVolume": 7701.25638267,
+        "outVolume": 7701.02178391,
+        "inPercentRank": 0.9776951672862454,
+        "outPercentRank": 0.9888475836431226,
+        "inZScoreLog": 3.1299466439326937,
+        "outZScoreLog": 4.608647606626984,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 34,
+        "volumeWindow": 15402.27816658,
+        "topCounterparties": [
+          {
+            "totalVolume": 15385.3233252,
+            "counterparty": "S3d8omDir3j7kUBFU7e2j1d3jhE7hZcmPZ6A2wsmomhwz6r",
+            "transactionCount": 20
+          },
+          {
+            "totalVolume": 5628.0328196,
+            "counterparty": "P2KBPHBKq1xuoSajuKxQCd7RfCfGFyoczoHQdVxacEUc9As",
+            "transactionCount": 31
+          },
+          {
+            "totalVolume": 2868.0791,
+            "counterparty": "P2K3pjd8RokaqxrDrYzE5Ff4p14rkmGjFadpULuJjDVBWkA",
+            "transactionCount": 3
+          },
+          {
+            "totalVolume": 669.48,
+            "counterparty": "P2KL8XAfKggpgNyWz2Su3ptnzvn3QQE1NuFpeT3t2r7C2XK",
+            "transactionCount": 3
+          },
+          {
+            "totalVolume": 467.3152,
+            "counterparty": "P2K6Ymuv5tCuz9DJD2GtcRXKDo5sAeKdinYDC71gWzXZe5t",
+            "transactionCount": 1
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2KBPHBKq1xuoSajuKxQCd7RfCfGFyoczoHQdVxacEUc9As",
+      "label": "router_service_like",
+      "labelType": "router",
+      "labelConfidence": 0.95,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 21,
+        "outTxCount": 4,
+        "inUniqueCounterparties": 10,
+        "outUniqueCounterparties": 3,
+        "inVolume": 100050.62682634,
+        "outVolume": 100009.025,
+        "inPercentRank": 0.9851301115241635,
+        "outPercentRank": 0.9591078066914498,
+        "inZScoreLog": 3.846841236344724,
+        "outZScoreLog": 1.6632162096973497,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 25,
+        "volumeWindow": 200059.65182634,
+        "topCounterparties": [
+          {
+            "totalVolume": 299396.8795,
+            "counterparty": "P2KHixzJvEPK6QTxo5gkLPsxZ349HbACryh4S44eP4jkrk6",
+            "transactionCount": 11
+          },
+          {
+            "totalVolume": 100000.025,
+            "counterparty": "S3d8omDir3j7kUBFU7e2j1d3jhE7hZcmPZ6A2wsmomhwz6r",
+            "transactionCount": 2
+          },
+          {
+            "totalVolume": 100000,
+            "counterparty": "P2K8nXpTJzmnj2kywvE33ABbVKM53CrR3YTHy5UEKMz69XA",
+            "transactionCount": 1
+          },
+          {
+            "totalVolume": 100000,
+            "counterparty": "P2K9Qbyr4cDg2GL6YWqZ4efrJFqNZumH3rXyEa4WPYrr6ix",
+            "transactionCount": 3
+          },
+          {
+            "totalVolume": 50000,
+            "counterparty": "P2KHTPPtCPCGqFmk6cWB4fd13FGiNzNGdeBWrR2oaRk8AZF",
+            "transactionCount": 1
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2KGinvxHLKPAHanC6TDJgW9wD1uZ7d2CYtjjkhiTDVc3Lp",
+      "label": "router_service_like",
+      "labelType": "router",
+      "labelConfidence": 0.95,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 10,
+        "outTxCount": 3,
+        "inUniqueCounterparties": 9,
+        "outUniqueCounterparties": 3,
+        "inVolume": 9430.5389,
+        "outVolume": 10480,
+        "inPercentRank": 0.9702602230483272,
+        "outPercentRank": 0.9405204460966543,
+        "inZScoreLog": 2.902306002248883,
+        "outZScoreLog": 1.232528285170596,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 13,
+        "volumeWindow": 19910.5389,
+        "topCounterparties": [
+          {
+            "totalVolume": 10460.088,
+            "counterparty": "S3d8omDir3j7kUBFU7e2j1d3jhE7hZcmPZ6A2wsmomhwz6r",
+            "transactionCount": 1
+          },
+          {
+            "totalVolume": 3849.1405,
+            "counterparty": "P2KCZ2n1rsBZZejLRexikzWP6Dz9zwwCvSMduBW9Srh89LD",
+            "transactionCount": 2
+          },
+          {
+            "totalVolume": 2024.9529,
+            "counterparty": "P2KDxQyUVc1SFvNhLiPThtqd98RKGoSBPwzz6hUo7J16idv",
+            "transactionCount": 1
+          },
+          {
+            "totalVolume": 1055.1036,
+            "counterparty": "P2K6gJqgE6MwWqpUktJ92shiqPPdtyUBeKVFgzpKKNevmSF",
+            "transactionCount": 4
+          },
+          {
+            "totalVolume": 1044.3036,
+            "counterparty": "P2KLok8ZfeCRpARK4LarS2rLdG1aEvErjgTnKRKszkC41Mx",
+            "transactionCount": 1
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2KHrGEMW6eFSYU8saKo113oCH9kAeyviB6ZN2jL4jtVp7K",
+      "label": "router_service_like",
+      "labelType": "router",
+      "labelConfidence": 0.98,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 73,
+        "outTxCount": 73,
+        "inUniqueCounterparties": 1,
+        "outUniqueCounterparties": 1,
+        "inVolume": 313159.53,
+        "outVolume": 313159.53,
+        "inPercentRank": 0.9925650557620818,
+        "outPercentRank": 0.9962825278810409,
+        "inZScoreLog": 5.499798436812298,
+        "outZScoreLog": 6.864098695541945,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 204,
+        "volumeWindow": 886351.84,
+        "topCounterparties": [
+          {
+            "totalVolume": 2173630.34,
+            "counterparty": "P2K4gBGN4fTez9yonEsSWi8zqjasUyRSVoBMMvjahJGjg3Z",
+            "transactionCount": 468
+          },
+          {
+            "totalVolume": 2159852.39,
+            "counterparty": "P2K3pjd8RokaqxrDrYzE5Ff4p14rkmGjFadpULuJjDVBWkA",
+            "transactionCount": 464
+          },
+          {
+            "totalVolume": 15005.53,
+            "counterparty": "P2KLxsM4aGBmKHiJX8VVwu6VPMWbFYcq3FrgvfX3XbjPkjK",
+            "transactionCount": 4
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2KJ8PPX7LSKHVMPkkxpQAeD5Be9t7b5pSR11dJLJpXSpBK",
+      "label": "router_service_like",
+      "labelType": "router",
+      "labelConfidence": 0.95,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 15,
+        "outTxCount": 15,
+        "inUniqueCounterparties": 1,
+        "outUniqueCounterparties": 1,
+        "inVolume": 332938.23,
+        "outVolume": 332938.23,
+        "inPercentRank": 0.9814126394052045,
+        "outPercentRank": 0.9851301115241635,
+        "inZScoreLog": 3.412891884884113,
+        "outZScoreLog": 3.9082060614606373,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 30,
+        "volumeWindow": 665876.46,
+        "topCounterparties": [
+          {
+            "totalVolume": 332938.23,
+            "counterparty": "P2K4gBGN4fTez9yonEsSWi8zqjasUyRSVoBMMvjahJGjg3Z",
+            "transactionCount": 15
+          },
+          {
+            "totalVolume": 332938.23,
+            "counterparty": "P2K3pjd8RokaqxrDrYzE5Ff4p14rkmGjFadpULuJjDVBWkA",
+            "transactionCount": 15
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    },
+    {
+      "tokenSymbol": "SOUL",
+      "address": "S3d8omDir3j7kUBFU7e2j1d3jhE7hZcmPZ6A2wsmomhwz6r",
+      "label": "router_service_like",
+      "labelType": "router",
+      "labelConfidence": 0.98,
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelUpdatedAt": "2026-05-27 00:20:15.445635",
+      "windowDays": 7,
+      "scoreSnapshot": {
+        "inTxCount": 29,
+        "outTxCount": 34,
+        "inUniqueCounterparties": 11,
+        "outUniqueCounterparties": 18,
+        "inVolume": 185787.22823616,
+        "outVolume": 12312.49096906,
+        "inPercentRank": 0.9888475836431226,
+        "outPercentRank": 0.9925650557620818,
+        "inZScoreLog": 4.269482005906522,
+        "outZScoreLog": 5.419004797251346,
+        "inMadScoreLog": null,
+        "outMadScoreLog": null
+      },
+      "recentActivity": {
+        "txCountWindow": 63,
+        "volumeWindow": 198099.71920522,
+        "topCounterparties": [
+          {
+            "totalVolume": 100000.025,
+            "counterparty": "P2KBPHBKq1xuoSajuKxQCd7RfCfGFyoczoHQdVxacEUc9As",
+            "transactionCount": 2
+          },
+          {
+            "totalVolume": 60980.2308,
+            "counterparty": "P2KKQBFNmxyD3vWMFFiV15m8w2bLgDBi4JQKm4b7wT8gxi7",
+            "transactionCount": 4
+          },
+          {
+            "totalVolume": 15385.3233252,
+            "counterparty": "P2KAq7v8ZK1a2ZHttJg4iBh2z4K8fKDCwErwvSzUZJShkdn",
+            "transactionCount": 20
+          },
+          {
+            "totalVolume": 10460.088,
+            "counterparty": "P2KGinvxHLKPAHanC6TDJgW9wD1uZ7d2CYtjjkhiTDVc3Lp",
+            "transactionCount": 1
+          },
+          {
+            "totalVolume": 4433.84103296,
+            "counterparty": "P2K3yFGxSHpAPt9eKL2aETTnAGeH79kpdHEj5dwpPxsAeod",
+            "transactionCount": 3
+          }
+        ]
+      },
+      "latestHistory": {
+        "lastChangedAt": "2026-05-27 00:20:15.445635",
+        "lastPreviousLabel": null
+      },
+      "review": {
+        "verdict": null,
+        "confidenceAccepted": null,
+        "notes": "",
+        "reviewer": "",
+        "reviewedAt": null
+      }
+    }
+  ]
+}
