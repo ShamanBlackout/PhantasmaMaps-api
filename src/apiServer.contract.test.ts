@@ -66,6 +66,13 @@ function createDeps(): ApiServerDeps {
     refreshTokenAnalyticsForDateImpl: async () => {},
     getTokenDailyMetricsImpl: async () => [],
     getTokenTopMoversImpl: async () => [],
+    getLabeledNodesImpl: async () => ({
+      page: 1,
+      pageSize: 50,
+      total: 0,
+      appliedFilters: {},
+      items: [],
+    }),
   };
 }
 
@@ -262,4 +269,49 @@ test("GET /analytics/tokens/:tokenSymbol/top-movers returns envelope", async () 
   assert.equal(response.body?.data?.windowDays, 7);
   assert.equal(response.body?.data?.limit, 5);
   assert.equal(Array.isArray(response.body?.data?.items), true);
+});
+
+test("GET /labels/nodes returns envelope and forwards filters", async () => {
+  const deps = createDeps();
+  let captured: Record<string, unknown> = {};
+  deps.getLabeledNodesImpl = async (options) => {
+    captured = options as Record<string, unknown>;
+    return {
+      page: Number(options.page),
+      pageSize: Number(options.pageSize),
+      total: 1,
+      appliedFilters: {
+        tokenSymbol: options.tokenSymbol,
+      },
+      items: [
+        {
+          tokenSymbol: "SOUL",
+          address: "P2Kexample",
+          label: "Hub",
+          labelConfidence: 0.92,
+        },
+      ],
+    };
+  };
+
+  const app = createApiApp(deps);
+  const response = await request(app).get(
+    "/labels/nodes?tokenSymbol=SOUL&label=Hub&minConfidence=0.8&page=2&pageSize=10",
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body?.data?.total, 1);
+  assert.equal(response.body?.meta?.pagination?.page, 2);
+  assert.equal(response.body?.meta?.pagination?.pageSize, 10);
+  assert.equal(captured?.tokenSymbol, "SOUL");
+  assert.equal(captured?.label, "Hub");
+  assert.equal(captured?.minConfidence, 0.8);
+});
+
+test("GET /labels/nodes validates confidence bounds", async () => {
+  const app = createApiApp(createDeps());
+  const response = await request(app).get("/labels/nodes?minConfidence=1.5");
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body?.error?.code, "INVALID_REQUEST");
 });

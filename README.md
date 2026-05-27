@@ -11,6 +11,7 @@ npm run api
 npm run sync
 npm run backfill
 npm run backfill:dry-run
+npm run label:dry-run
 npm run sync:nodes-normalized
 npm run test:rpc
 npm run test:db-snapshot
@@ -129,6 +130,7 @@ sql/migrations/008_block_sync_claims.sql
 sql/migrations/009_performance_indexes.sql
 sql/migrations/010_address_connections.sql
 sql/migrations/011_analytics_daily.sql
+sql/migrations/012_labeling_support.sql
 ```
 
 4. Start the API or one of the worker commands.
@@ -154,6 +156,7 @@ psql $env:DATABASE_URL -f .\sql/migrations/008_block_sync_claims.sql
 psql $env:DATABASE_URL -f .\sql/migrations/009_performance_indexes.sql
 psql $env:DATABASE_URL -f .\sql/migrations/010_address_connections.sql
 psql $env:DATABASE_URL -f .\sql/migrations/011_analytics_daily.sql
+psql $env:DATABASE_URL -f .\sql/migrations/012_labeling_support.sql
 ```
 
 Bash example:
@@ -171,7 +174,8 @@ for file in \
   sql/migrations/008_block_sync_claims.sql \
   sql/migrations/009_performance_indexes.sql \
   sql/migrations/010_address_connections.sql \
-  sql/migrations/011_analytics_daily.sql; do
+  sql/migrations/011_analytics_daily.sql \
+  sql/migrations/012_labeling_support.sql; do
   psql "$DATABASE_URL" -f "$file"
 done
 ```
@@ -314,6 +318,29 @@ The application loads environment variables through `process.loadEnvFile?.()` in
 
 `npm run backfill:dry-run`
 : Parses five blocks starting from the configured backfill block and writes a JSON report without touching the database.
+
+`npm run label:dry-run`
+: Scores per-token wallet activity for candidate labels (high inbound/outbound, hub receiver, distributor, router-like) across all historical data by default, and writes `labeling-dry-run.json` without modifying database labels.
+
+When no `--label-token` is provided, the scorer runs token-by-token batching automatically to avoid query timeouts on large all-time datasets.
+
+`node ./node_modules/tsx/dist/cli.mjs src/labelingDryRun.ts --label-all-time --label-token=SOUL`
+: Runs the same scorer on all historical transactions, optionally scoped to one token symbol.
+
+`node ./node_modules/tsx/dist/cli.mjs src/labelingDryRun.ts --label-days=30 --label-token=SOUL --label-limit=25 --label-persist-scores`
+: Upserts scored wallet features and candidate labels into `node_label_scores` for later review, while still writing the dry-run JSON report. Use `--label-days=...` only when you intentionally want a bounded time window instead of all-time.
+
+`node ./node_modules/tsx/dist/cli.mjs src/labelingDryRun.ts --label-disable-batch-tokens`
+: Runs a single aggregate query across all tokens (not recommended for large all-time datasets).
+
+`node ./node_modules/tsx/dist/cli.mjs src/labelingDryRun.ts --label-query-timeout-ms=600000`
+: Increases the per-query timeout for heavy all-time scoring batches.
+
+`node ./node_modules/tsx/dist/cli.mjs src/labelingDryRun.ts --label-days=30 --label-token=SOUL --label-apply --label-min-confidence=0.8 --label-max-updates=200`
+: Applies candidate labels to `nodes` and writes audit rows to `node_label_history`. Manual labels are protected by default; add `--label-overwrite-manual` only when intentionally replacing manually curated labels.
+
+`node ./node_modules/tsx/dist/cli.mjs src/labelingReviewSample.ts --label-source=heuristic_rubric_v1 --label-token=SOUL --label-per-label=8 --label-max-total=80`
+: Produces a stratified manual-review sample in `labeling-review-sample.json` with current label evidence, recent activity, and blank review fields to annotate.
 
 `npm run sync:nodes-normalized`
 : Refreshes token metadata and tracked node balances, then normalizes node, edge, and transaction amounts.
@@ -646,6 +673,74 @@ Example response:
       "address": "P2KExampleAddress",
       "tokenSymbol": "SOUL",
       "netBalance": "502341230000"
+    }
+  ]
+}
+```
+
+### `GET /labels/nodes`
+
+Returns paginated labeled nodes with optional filters and score snapshots.
+
+Query parameters:
+
+- `tokenSymbol`: optional token symbol.
+- `label`: optional exact label filter.
+- `labelType`: optional exact label type filter.
+- `labelSource`: optional exact source filter.
+- `minConfidence`: optional lower bound in range `0..1`.
+- `maxConfidence`: optional upper bound in range `0..1`.
+- `updatedSince`: optional UTC ISO datetime lower bound on label update time.
+- `windowDays`: optional score snapshot window, default `30`.
+- `page`: optional page number, default `1`.
+- `pageSize`: optional page size, clamped by API max page size.
+
+Example request:
+
+```bash
+curl "http://localhost:3000/labels/nodes?tokenSymbol=SOUL&labelSource=heuristic_rubric_v1&minConfidence=0.8&page=1&pageSize=25"
+```
+
+Example response:
+
+```json
+{
+  "page": 1,
+  "pageSize": 25,
+  "total": 9,
+  "appliedFilters": {
+    "tokenSymbol": "SOUL",
+    "labelSource": "heuristic_rubric_v1",
+    "minConfidence": 0.8,
+    "windowDays": 30
+  },
+  "items": [
+    {
+      "tokenSymbol": "SOUL",
+      "address": "P2KExampleAddress",
+      "label": "Hub",
+      "labelType": "hub",
+      "labelSource": "heuristic_rubric_v1",
+      "labelVersion": "label-rubric-v1",
+      "labelConfidence": 0.92,
+      "labelUpdatedAt": "2026-05-27T00:20:15.445Z",
+      "labelEvidence": {},
+      "scoreSnapshot": {
+        "windowDays": 30,
+        "inTxCount": 80,
+        "outTxCount": 74,
+        "inUniqueCounterparties": 38,
+        "outUniqueCounterparties": 42,
+        "inVolume": 1200.5,
+        "outVolume": 1180.3,
+        "inPercentRank": 0.99,
+        "outPercentRank": 0.98,
+        "inZScoreLog": 2.7,
+        "outZScoreLog": 2.6,
+        "inMadScoreLog": 3.2,
+        "outMadScoreLog": 3.1,
+        "computedAt": "2026-05-27T00:20:10.000Z"
+      }
     }
   ]
 }

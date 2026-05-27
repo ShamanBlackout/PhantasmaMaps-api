@@ -22,6 +22,7 @@ import {
   getFullTokenGraph,
   getSyncStates,
   getTokenMetadata,
+  getLabeledNodes,
   getTopHolders,
   getTransactionsPage,
   refreshTokenAnalyticsForDate,
@@ -118,6 +119,18 @@ export type ApiServerDeps = {
     windowDays: number,
     limit: number,
   ) => Promise<unknown[]>;
+  getLabeledNodesImpl: (options: {
+    tokenSymbol?: string;
+    label?: string;
+    labelType?: string;
+    labelSource?: string;
+    minConfidence?: number;
+    maxConfidence?: number;
+    updatedSince?: Date;
+    windowDays?: number;
+    page: number;
+    pageSize: number;
+  }) => Promise<unknown>;
 };
 
 const defaultDeps: ApiServerDeps = {
@@ -140,6 +153,7 @@ const defaultDeps: ApiServerDeps = {
   refreshTokenAnalyticsForDateImpl: refreshTokenAnalyticsForDate,
   getTokenDailyMetricsImpl: getTokenDailyMetrics,
   getTokenTopMoversImpl: getTokenTopMovers,
+  getLabeledNodesImpl: getLabeledNodes,
 };
 
 function readPositiveInt(value: string | undefined, fallback: number): number {
@@ -214,7 +228,7 @@ function isValidTokenSymbol(rawToken: string): boolean {
 
 function isValidAddress(rawAddress: string): boolean {
   const address = String(rawAddress || "").trim();
-  return /^P[a-zA-Z0-9]{20,}$/.test(address);
+  return /^[PS][a-zA-Z0-9]{20,}$/.test(address);
 }
 
 function getRequestId(request: Request): string {
@@ -923,6 +937,117 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           page,
           pageSize: clampedPageSize,
           total: Number(result?.total ?? 0),
+        },
+      });
+    } catch (error: unknown) {
+      handleRouteError(response, error);
+    }
+  });
+
+  app.get("/labels/nodes", async (request: Request, response: Response) => {
+    try {
+      const tokenSymbol = request.query.tokenSymbol
+        ? String(request.query.tokenSymbol).trim()
+        : undefined;
+      const label = request.query.label
+        ? String(request.query.label).trim()
+        : undefined;
+      const labelType = request.query.labelType
+        ? String(request.query.labelType).trim()
+        : undefined;
+      const labelSource = request.query.labelSource
+        ? String(request.query.labelSource).trim()
+        : undefined;
+      const minConfidence = readOptionalNumber(
+        request.query.minConfidence
+          ? String(request.query.minConfidence)
+          : undefined,
+      );
+      const maxConfidence = readOptionalNumber(
+        request.query.maxConfidence
+          ? String(request.query.maxConfidence)
+          : undefined,
+      );
+      const updatedSince = readOptionalIsoDate(
+        request.query.updatedSince
+          ? String(request.query.updatedSince)
+          : undefined,
+      );
+      const windowDays = readPositiveInt(
+        request.query.windowDays ? String(request.query.windowDays) : undefined,
+        30,
+      );
+      const page = readPositiveInt(String(request.query.page ?? ""), 1);
+      const pageSize = clampInt(
+        readPositiveInt(String(request.query.pageSize ?? ""), 50),
+        1,
+        apiConfig.transactionPageSizeMax,
+      );
+
+      if (tokenSymbol && !isValidTokenSymbol(tokenSymbol)) {
+        throw new ApiError(
+          400,
+          "TOKEN_SYMBOL_INVALID",
+          "tokenSymbol query parameter is invalid",
+          { tokenSymbol },
+        );
+      }
+
+      if (
+        minConfidence !== undefined &&
+        (minConfidence < 0 || minConfidence > 1)
+      ) {
+        throw new ApiError(
+          400,
+          "INVALID_REQUEST",
+          "minConfidence must be between 0 and 1",
+          { minConfidence },
+        );
+      }
+
+      if (
+        maxConfidence !== undefined &&
+        (maxConfidence < 0 || maxConfidence > 1)
+      ) {
+        throw new ApiError(
+          400,
+          "INVALID_REQUEST",
+          "maxConfidence must be between 0 and 1",
+          { maxConfidence },
+        );
+      }
+
+      if (
+        minConfidence !== undefined &&
+        maxConfidence !== undefined &&
+        minConfidence > maxConfidence
+      ) {
+        throw new ApiError(
+          400,
+          "INVALID_REQUEST",
+          "minConfidence cannot exceed maxConfidence",
+          { minConfidence, maxConfidence },
+        );
+      }
+
+      const result = await deps.getLabeledNodesImpl({
+        tokenSymbol,
+        label,
+        labelType,
+        labelSource,
+        minConfidence,
+        maxConfidence,
+        updatedSince,
+        windowDays,
+        page,
+        pageSize,
+      });
+
+      sendSuccess(request, response, result, {
+        pagination: {
+          page,
+          pageSize,
+          total: Number((result as { total?: number })?.total ?? 0),
         },
       });
     } catch (error: unknown) {

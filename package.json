@@ -13,6 +13,8 @@
     "api": "node ./node_modules/tsx/dist/cli.mjs src/startApiServer.ts",
     "backfill": "node ./node_modules/tsx/dist/cli.mjs src/backfill.ts",
     "backfill:dry-run": "node ./node_modules/tsx/dist/cli.mjs src/backfillDryRun.ts",
+    "label:dry-run": "node ./node_modules/tsx/dist/cli.mjs src/labelingDryRun.ts",
+    "label:review-sample": "node ./node_modules/tsx/dist/cli.mjs src/labelingReviewSample.ts",
     "sync": "npm run backfill",
     "sync:nodes-normalized": "node ./node_modules/tsx/dist/cli.mjs src/syncNodeBalancesNormalized.ts",
     "find-first-transfer": "node ./node_modules/tsx/dist/cli.mjs src/findFirstTransferBlock.ts",
