@@ -2,6 +2,7 @@ import {
   Pool,
   type PoolClient,
   type PoolConfig,
+  type QueryResult,
   type QueryResultRow,
 } from "pg";
 import { PhantasmaTS } from "phantasma-sdk-ts";
@@ -53,7 +54,130 @@ function buildPoolConfig(): PoolConfig {
 
 export const databasePool = new Pool(buildPoolConfig());
 
+// Prevent process crashes when an idle pooled client disconnects unexpectedly.
+databasePool.on("error", (error: Error) => {
+  const maybeError = error as Error & {
+    code?: string;
+    errno?: string | number;
+    syscall?: string;
+    address?: string;
+    port?: number;
+  };
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event: "database_pool_error",
+      timestamp: new Date().toISOString(),
+      message: maybeError.message,
+      code: maybeError.code ?? null,
+      errno: maybeError.errno ?? null,
+      syscall: maybeError.syscall ?? null,
+      address: maybeError.address ?? null,
+      port: maybeError.port ?? null,
+      pool: {
+        totalCount: databasePool.totalCount,
+        idleCount: databasePool.idleCount,
+        waitingCount: databasePool.waitingCount,
+      },
+    }),
+  );
+});
+
 const RESTORE_BATCH_SIZE = 500;
+const READ_RETRY_ATTEMPTS = 3;
+const READ_RETRY_BASE_DELAY_MS = 150;
+
+type RetryableDbError = Error & {
+  code?: string;
+  errno?: string | number;
+  syscall?: string;
+};
+
+function isRetryableReadError(error: unknown): boolean {
+  const candidate = error as RetryableDbError;
+  const code = String(candidate?.code ?? "").toUpperCase();
+  const errno = String(candidate?.errno ?? "").toUpperCase();
+  const message = String(candidate?.message ?? "").toLowerCase();
+
+  if (
+    [
+      "ECONNRESET",
+      "ETIMEDOUT",
+      "ECONNREFUSED",
+      "EPIPE",
+      "EHOSTUNREACH",
+      "57P01",
+      "57P02",
+      "57P03",
+      "53300",
+      "08000",
+      "08001",
+      "08003",
+      "08006",
+    ].includes(code)
+  ) {
+    return true;
+  }
+
+  if (["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EPIPE"].includes(errno)) {
+    return true;
+  }
+
+  return (
+    message.includes("connection terminated unexpectedly") ||
+    message.includes("server closed the connection unexpectedly") ||
+    message.includes("connection reset") ||
+    message.includes("timeout")
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function queryReadWithRetry<T extends QueryResultRow = QueryResultRow>(
+  text: string,
+  values?: unknown[],
+  context = "query",
+): Promise<QueryResult<T>> {
+  let attempt = 0;
+
+  while (attempt < READ_RETRY_ATTEMPTS) {
+    attempt += 1;
+
+    try {
+      return await databasePool.query<T>(text, values);
+    } catch (error) {
+      const retryable = isRetryableReadError(error);
+      const isLastAttempt = attempt >= READ_RETRY_ATTEMPTS;
+
+      if (!retryable || isLastAttempt) {
+        throw error;
+      }
+
+      const backoffMs = READ_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+      const candidate = error as RetryableDbError;
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          event: "database_read_retry",
+          timestamp: new Date().toISOString(),
+          context,
+          attempt,
+          maxAttempts: READ_RETRY_ATTEMPTS,
+          backoffMs,
+          code: candidate?.code ?? null,
+          message: candidate?.message ?? String(error),
+        }),
+      );
+      await delay(backoffMs);
+    }
+  }
+
+  throw new Error("unreachable retry state");
+}
 
 function readRawEventAmountFromMetadata(
   metadata: Record<string, unknown> | null | undefined,
@@ -473,7 +597,7 @@ export async function closeDatabasePool(): Promise<void> {
 }
 
 export async function testDatabaseConnection(): Promise<void> {
-  await databasePool.query("SELECT 1");
+  await queryReadWithRetry("SELECT 1", [], "health_check");
 }
 
 export async function withDatabaseTransaction<T>(
@@ -1878,12 +2002,13 @@ async function getTopHolderGraphNodes(
 }
 
 export async function getAvailableTokens(): Promise<string[]> {
-  const result = await databasePool.query<{ token_symbol: string }>(
+  const result = await queryReadWithRetry<{ token_symbol: string }>(
     `SELECT DISTINCT token_symbol
        FROM transactions
       WHERE token_symbol <> $1
       ORDER BY token_symbol ASC`,
     [CHAIN_SYNC_TOKEN],
+    "get_available_tokens",
   );
 
   return result.rows.map((row) => row.token_symbol);
@@ -1892,7 +2017,7 @@ export async function getAvailableTokens(): Promise<string[]> {
 export async function getTokenMetadata(
   tokenSymbol: string,
 ): Promise<TokenMetadataRecord | null> {
-  const result = await databasePool.query(
+  const result = await queryReadWithRetry(
     `SELECT token_symbol,
             name,
             decimals,
@@ -1911,6 +2036,7 @@ export async function getTokenMetadata(
        FROM token_metadata tm
       WHERE token_symbol = $1`,
     [tokenSymbol],
+    "get_token_metadata",
   );
 
   if (result.rowCount === 0) {
@@ -1948,9 +2074,10 @@ export async function getFullTokenGraph(
                   ORDER BY id ASC`,
           values: [tokenSymbol],
         };
-  const edgesResult = await databasePool.query(
+  const edgesResult = await queryReadWithRetry(
     edgesQuery.text,
     edgesQuery.values,
+    "get_full_token_graph_edges",
   );
 
   const edges = edgesResult.rows.map(mapGraphEdgeRow);
@@ -1962,13 +2089,14 @@ export async function getFullTokenGraph(
   }
 
   const nodesResult = addressSet.size
-    ? await databasePool.query(
+    ? await queryReadWithRetry(
         `SELECT address, token_symbol, balance, balance_normalized, label, metadata
            FROM nodes
           WHERE token_symbol = $1
             AND address = ANY($2::text[])
           ORDER BY address ASC`,
         [tokenSymbol, [...addressSet]],
+        "get_full_token_graph_nodes",
       )
     : { rows: [] as QueryResultRow[] };
 
@@ -2060,7 +2188,7 @@ export async function getAddressSubgraph(
   const cached = subgraphCacheGet(cacheKey);
   if (cached) return cached;
 
-  const edgesResult = await databasePool.query(
+  const edgesResult = await queryReadWithRetry(
     `WITH RECURSIVE walk AS (
        SELECT $2::text AS address, 0 AS depth
        UNION ALL
@@ -2118,6 +2246,7 @@ export async function getAddressSubgraph(
      SELECT * FROM limited_edges
      ORDER BY id ASC`,
     [tokenSymbol, rootAddress, depth, edgeLimit],
+    "get_address_subgraph_edges",
   );
 
   const edges = edgesResult.rows.map(mapGraphEdgeRow);
@@ -2128,13 +2257,14 @@ export async function getAddressSubgraph(
     addressSet.add(edge.toAddress);
   }
 
-  const nodesResult = await databasePool.query(
+  const nodesResult = await queryReadWithRetry(
     `SELECT address, token_symbol, balance, balance_normalized, label, metadata
        FROM nodes
       WHERE token_symbol = $1
         AND address = ANY($2::text[])
       ORDER BY address ASC`,
     [tokenSymbol, [...addressSet]],
+    "get_address_subgraph_nodes",
   );
 
   const subgraphResult = {
@@ -2340,7 +2470,7 @@ export async function getTransactionsPage(options: {
   // Combine count and data queries into a single query using window function
   // This reduces database round trips by 50% for this endpoint
   values.push(pageSize, offset);
-  const result = await databasePool.query<{
+  const result = await queryReadWithRetry<{
     id: string;
     tx_hash: string;
     event_index: number;
@@ -2384,6 +2514,7 @@ export async function getTransactionsPage(options: {
       ORDER BY ${orderByClause}
       LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
+    "get_transactions_page",
   );
 
   // Extract total from first row (COUNT(*) OVER() returns same value for all rows)
@@ -2403,7 +2534,7 @@ export async function getAddressActivity(
   address: string,
   days: number,
 ): Promise<{ date: string; txCount: number; volume: number }[]> {
-  const result = await databasePool.query(
+  const result = await queryReadWithRetry(
     `SELECT
        date_trunc('day', timestamp)::date::text AS date,
        COUNT(*) AS tx_count,
@@ -2415,6 +2546,7 @@ export async function getAddressActivity(
      GROUP BY date_trunc('day', timestamp)::date
      ORDER BY date_trunc('day', timestamp)::date ASC`,
     [tokenSymbol, address, days],
+    "get_address_activity",
   );
 
   return result.rows.map((row) => ({
@@ -2434,7 +2566,7 @@ export async function getAddressConnections(
     transactionCount: number;
   }>
 > {
-  const result = await databasePool.query(
+  const result = await queryReadWithRetry(
     `SELECT
        counterparty,
        total_volume,
@@ -2444,6 +2576,7 @@ export async function getAddressConnections(
        AND address = $2
      ORDER BY total_volume DESC`,
     [tokenSymbol, address],
+    "get_address_connections",
   );
 
   return result.rows.map((row) => ({
@@ -2451,6 +2584,201 @@ export async function getAddressConnections(
     totalVolume: Number(row.total_volume),
     transactionCount: Number(row.transaction_count),
   }));
+}
+
+export async function findAddressPaths(options: {
+  tokenSymbol: string;
+  fromAddress: string;
+  toAddress: string;
+  maxHops: number;
+  pathLimit: number;
+  stopAtTerminals?: boolean;
+}): Promise<
+  Array<{
+    nodePath: string[];
+    hopCount: number;
+    totalVolume: number;
+  }>
+> {
+  const maxHops = Math.max(1, Math.min(Math.floor(options.maxHops), 8));
+  const pathLimit = Math.max(1, Math.min(Math.floor(options.pathLimit), 500));
+  const stopAtTerminals = options.stopAtTerminals !== false;
+  const fromAddress = String(options.fromAddress || "").trim();
+  const toAddress = String(options.toAddress || "").trim();
+
+  if (!fromAddress || !toAddress || fromAddress === toAddress) {
+    return [];
+  }
+
+  const adjacency = new Map<
+    string,
+    Array<{ nextAddress: string; totalVolume: number }>
+  >();
+
+  const visited = new Set<string>([fromAddress]);
+  let frontier = new Set<string>([fromAddress]);
+  const MAX_DISCOVERED_ADDRESSES = 25000;
+
+  for (let depth = 0; depth < maxHops && frontier.size > 0; depth += 1) {
+    const frontierAddresses = [...frontier];
+    const frontierResult = await queryReadWithRetry<{
+      address: string;
+      counterparty: string;
+      total_volume: string | number;
+    }>(
+      `SELECT address, counterparty, total_volume
+         FROM address_connections
+        WHERE token_symbol = $1
+          AND address = ANY($2::text[])`,
+      [options.tokenSymbol, frontierAddresses],
+      "find_address_paths_frontier",
+    );
+
+    const nextFrontier = new Set<string>();
+
+    for (const row of frontierResult.rows) {
+      const address = String(row.address || "").trim();
+      const counterparty = String(row.counterparty || "").trim();
+      if (!address || !counterparty) continue;
+
+      if (!adjacency.has(address)) {
+        adjacency.set(address, []);
+      }
+      adjacency.get(address)?.push({
+        nextAddress: counterparty,
+        totalVolume: Number(row.total_volume) || 0,
+      });
+
+      if (!visited.has(counterparty)) {
+        visited.add(counterparty);
+        nextFrontier.add(counterparty);
+      }
+    }
+
+    frontier = nextFrontier;
+    if (visited.size >= MAX_DISCOVERED_ADDRESSES) {
+      break;
+    }
+  }
+
+  const terminalAddressSet = new Set<string>();
+  if (stopAtTerminals) {
+    const terminalLabelRows = await queryReadWithRetry<{
+      address: string;
+      label_type: string | null;
+      label: string | null;
+    }>(
+      `SELECT address, label_type, label
+         FROM nodes
+        WHERE token_symbol = $1
+          AND address = ANY($2::text[])`,
+      [options.tokenSymbol, [...visited]],
+      "find_address_paths_terminal_labels",
+    );
+
+    terminalLabelRows.rows.forEach((row) => {
+      const address = String(row.address || "").trim();
+      if (!address) return;
+
+      const labelType = String(row.label_type || "")
+        .trim()
+        .toLowerCase();
+      const label = String(row.label || "")
+        .trim()
+        .toLowerCase();
+
+      const isHub = labelType.includes("hub") || label.includes("hub");
+      const isHighInbound =
+        labelType.includes("high_inbound") ||
+        labelType.includes("high inbound") ||
+        label.includes("high_inbound") ||
+        label.includes("high inbound");
+      const isHighOutbound =
+        labelType.includes("high_outbound") ||
+        labelType.includes("high outbound") ||
+        label.includes("high_outbound") ||
+        label.includes("high outbound");
+
+      if (isHub || isHighInbound || isHighOutbound) {
+        terminalAddressSet.add(address);
+      }
+    });
+  }
+
+  const results: Array<{
+    nodePath: string[];
+    hopCount: number;
+    totalVolume: number;
+  }> = [];
+
+  function dfs(
+    currentAddress: string,
+    path: string[],
+    totalVolume: number,
+  ): void {
+    if (results.length >= pathLimit) {
+      return;
+    }
+
+    const hopCount = Math.max(0, path.length - 1);
+    if (hopCount > maxHops) {
+      return;
+    }
+
+    if (currentAddress === toAddress && hopCount > 0) {
+      results.push({
+        nodePath: [...path],
+        hopCount,
+        totalVolume,
+      });
+      return;
+    }
+
+    if (
+      stopAtTerminals &&
+      currentAddress !== fromAddress &&
+      terminalAddressSet.has(currentAddress)
+    ) {
+      if (hopCount > 0) {
+        results.push({
+          nodePath: [...path],
+          hopCount,
+          totalVolume,
+        });
+      }
+      return;
+    }
+
+    if (hopCount === maxHops) {
+      return;
+    }
+
+    const neighbors = adjacency.get(currentAddress) || [];
+    for (const neighbor of neighbors) {
+      if (path.includes(neighbor.nextAddress)) {
+        continue;
+      }
+
+      dfs(
+        neighbor.nextAddress,
+        [...path, neighbor.nextAddress],
+        totalVolume + (Number(neighbor.totalVolume) || 0),
+      );
+
+      if (results.length >= pathLimit) {
+        return;
+      }
+    }
+  }
+
+  dfs(fromAddress, [fromAddress], 0);
+
+  results.sort(
+    (left, right) =>
+      left.hopCount - right.hopCount || right.totalVolume - left.totalVolume,
+  );
+
+  return results;
 }
 
 export async function getLabeledNodes(options: {
