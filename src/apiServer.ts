@@ -12,6 +12,7 @@ import { cacheMiddleware, invalidateCache } from "./responseCache";
 import {
   clearSubgraphCache,
   closeDatabasePool,
+  findAddressPaths,
   getTokenDailyMetrics,
   getTokenTopMovers,
   getAddressActivity,
@@ -95,6 +96,14 @@ export type ApiServerDeps = {
     tokenSymbol: string,
     address: string,
   ) => Promise<unknown[]>;
+  findAddressPathsImpl: (options: {
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+    maxHops: number;
+    pathLimit: number;
+    stopAtTerminals?: boolean;
+  }) => Promise<unknown[]>;
   getTopHoldersImpl: (tokenSymbol: string, limit: number) => Promise<unknown>;
   getFullTokenGraphImpl: (
     tokenSymbol: string,
@@ -146,6 +155,7 @@ const defaultDeps: ApiServerDeps = {
   getTokenMetadataImpl: getTokenMetadata,
   getAddressSubgraphImpl: getAddressSubgraph,
   getAddressConnectionsImpl: getAddressConnections,
+  findAddressPathsImpl: findAddressPaths,
   getTopHoldersImpl: getTopHolders,
   getFullTokenGraphImpl: getFullTokenGraph,
   getTransactionsPageImpl: getTransactionsPage,
@@ -469,9 +479,31 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
   app.get("/health", async (_request: Request, response: Response) => {
     try {
       await deps.testDatabaseConnectionImpl();
-      sendSuccess(_request, response, { ok: true });
+      sendSuccess(_request, response, {
+        ok: true,
+        status: "healthy",
+        database: "up",
+      });
     } catch (error: unknown) {
-      handleRouteError(response, error);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+
+      sendSuccess(
+        _request,
+        response,
+        {
+          ok: false,
+          status: "degraded",
+          database: "down",
+          error: {
+            message: errorMessage,
+          },
+        },
+        {
+          degraded: true,
+        },
+        503,
+      );
     }
   });
 
@@ -707,6 +739,86 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
       }
     },
   );
+
+  app.get("/trace/paths", async (request: Request, response: Response) => {
+    try {
+      const tokenSymbol = String(request.query.token ?? "").trim();
+      const fromAddress = String(request.query.from ?? "").trim();
+      const toAddress = String(request.query.to ?? "").trim();
+
+      if (!tokenSymbol || !fromAddress || !toAddress) {
+        throw new ApiError(
+          400,
+          "INVALID_REQUEST",
+          "token, from, and to query parameters are required",
+        );
+      }
+      if (!isValidTokenSymbol(tokenSymbol)) {
+        throw new ApiError(
+          400,
+          "TOKEN_SYMBOL_INVALID",
+          "token query parameter is invalid",
+          { tokenSymbol },
+        );
+      }
+      if (!isValidAddress(fromAddress) || !isValidAddress(toAddress)) {
+        throw new ApiError(
+          400,
+          "ADDRESS_INVALID",
+          "from and to query parameters must be valid wallet addresses",
+          {
+            fromAddress,
+            toAddress,
+          },
+        );
+      }
+
+      const maxHops = clampInt(
+        readPositiveInt(
+          request.query.maxHops ? String(request.query.maxHops) : undefined,
+          5,
+        ),
+        1,
+        8,
+      );
+      const pathLimit = clampInt(
+        readPositiveInt(
+          request.query.limit ? String(request.query.limit) : undefined,
+          20,
+        ),
+        1,
+        100,
+      );
+      const stopAtTerminalsRaw = String(request.query.stopAtTerminals ?? "true")
+        .trim()
+        .toLowerCase();
+      const stopAtTerminals = !["false", "0", "no", "off"].includes(
+        stopAtTerminalsRaw,
+      );
+
+      const items = await deps.findAddressPathsImpl({
+        tokenSymbol,
+        fromAddress,
+        toAddress,
+        maxHops,
+        pathLimit,
+        stopAtTerminals,
+      });
+
+      sendSuccess(request, response, {
+        tokenSymbol,
+        fromAddress,
+        toAddress,
+        maxHops,
+        limit: pathLimit,
+        stopAtTerminals,
+        totalPaths: items.length,
+        items,
+      });
+    } catch (error: unknown) {
+      handleRouteError(response, error);
+    }
+  });
 
   app.get(
     "/tokens/:tokenSymbol/top-holders",
