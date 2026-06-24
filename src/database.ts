@@ -3466,6 +3466,8 @@ export async function getTokenTopMovers(
        CASE
          WHEN COALESCE(b.balance, 0::numeric) > 0
            THEN ((COALESCE(l.balance, 0::numeric) - COALESCE(b.balance, 0::numeric)) / b.balance) * 100::numeric
+         WHEN COALESCE(b.balance, 0::numeric) = 0 AND COALESCE(l.balance, 0::numeric) > 0
+           THEN 100::numeric
          ELSE 0::numeric
        END AS delta_pct
      FROM latest_balances l
