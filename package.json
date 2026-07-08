@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "npm run api",
-    "build": "node node_modules/esbuild/bin/esbuild src/startApiServer.ts --bundle --platform=node --target=node22 --outfile=dist/startApiServer.js --external:pg-native",
+    "build": "esbuild src/startApiServer.ts --bundle --platform=node --target=node22 --outfile=dist/startApiServer.js --external:pg-native",
     "start:prod": "node dist/startApiServer.js",
     "api": "node ./scripts/startApiServer.js",
     "backfill": "node ./node_modules/tsx/dist/cli.mjs src/backfill.ts",
@@ -30,7 +30,7 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "pg": "^8.20.0",
-    "phantasma-sdk-ts": "^0.8.0"
+    "phantasma-sdk-ts": "^0.8.2"
   },
   "devDependencies": {
     "@types/compression": "^1.8.1",
@@ -39,6 +39,7 @@
     "@types/node": "^25.7.0",
     "@types/pg": "^8.20.0",
     "@types/supertest": "^7.2.0",
+    "esbuild": "^0.25.11",
     "supertest": "^7.2.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
