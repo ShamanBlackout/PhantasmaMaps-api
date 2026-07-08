@@ -17,11 +17,35 @@ export interface ParsedTransfer {
   metadata: Record<string, unknown>;
 }
 
+export interface ParsedTokenLedgerEvent {
+  eventIndex: number;
+  txHash: string;
+  blockHeight: number;
+  timestamp: Date;
+  tokenSymbol: string;
+  chainName: string;
+  address: string;
+  relatedAddress: string | null;
+  eventKind: "burn" | "mint";
+  amount: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ParsedBalanceTouch {
+  eventIndex: number;
+  tokenSymbol: string;
+  chainName: string;
+  address: string;
+  reason: "transfer" | "burn" | "mint";
+}
+
 export interface ParsedBlockResult {
   blockHeight: number;
   transferCount: number;
   tokenSymbols: string[];
   transfers: ParsedTransfer[];
+  ledgerEvents: ParsedTokenLedgerEvent[];
+  touchedNodePairs: Array<{ address: string; tokenSymbol: string }>;
 }
 
 export interface SyncStateRecord {

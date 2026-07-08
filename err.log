@@ -1,0 +1,3 @@
+{"level":"warn","event":"query_cache_table_missing","timestamp":"2026-07-08T00:41:46.535Z","message":"api_query_cache table not found. Apply migration 013_query_cache.sql to enable persistent API caching."}
+{"level":"warn","event":"database_read_retry","timestamp":"2026-07-08T01:40:09.192Z","context":"get_address_subgraph_edges","attempt":1,"maxAttempts":3,"backoffMs":150,"code":null,"message":"Query read timeout"}
+{"level":"warn","event":"database_read_retry","timestamp":"2026-07-08T01:40:39.378Z","context":"get_address_subgraph_edges","attempt":2,"maxAttempts":3,"backoffMs":300,"code":null,"message":"Query read timeout"}

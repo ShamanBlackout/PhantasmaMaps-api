@@ -6,8 +6,10 @@ import {
 } from "phantasma-sdk-ts";
 import { syncConfig } from "./phantasma.config";
 import type {
+  ParsedBalanceTouch,
   ParsedBlockResult,
   ParsedTransfer,
+  ParsedTokenLedgerEvent,
   TokenEventMatch,
 } from "./phantasma.types";
 
@@ -38,6 +40,11 @@ function resolveBlockHeight(
 function isTokenMovementEvent(event: Event): boolean {
   const kind = event.kind.toLowerCase();
   return kind === "tokensend" || kind === "tokenreceive";
+}
+
+function isTokenSupplyEvent(event: Event): boolean {
+  const kind = event.kind.toLowerCase();
+  return kind === "tokenburn" || kind === "tokenmint";
 }
 
 function decodeTokenEvent(
@@ -132,33 +139,180 @@ function pairTransferEvents(tx: TransactionData): ParsedTransfer[] {
   return transfers;
 }
 
+function collectBalanceTouches(tx: TransactionData): ParsedBalanceTouch[] {
+  const touches = new Map<string, ParsedBalanceTouch>();
+
+  for (const transfer of pairTransferEvents(tx)) {
+    for (const address of [transfer.fromAddress, transfer.toAddress]) {
+      const key = `${transfer.tokenSymbol}:${address}:transfer`;
+      if (!touches.has(key)) {
+        touches.set(key, {
+          eventIndex: transfer.eventIndex,
+          tokenSymbol: transfer.tokenSymbol,
+          chainName: transfer.chainName,
+          address,
+          reason: "transfer",
+        });
+      }
+    }
+  }
+
+  const txEvents = tx.events ?? [];
+
+  for (const [eventIndex, event] of txEvents.entries()) {
+    if (!isTokenSupplyEvent(event)) {
+      continue;
+    }
+
+    const decodedEvent = decodeTokenEvent(event, eventIndex);
+    if (!decodedEvent) {
+      continue;
+    }
+
+    const reason = event.kind.toLowerCase() === "tokenburn" ? "burn" : "mint";
+    const address = String(event.address ?? "").trim();
+
+    if (!address) {
+      continue;
+    }
+
+    const key = `${decodedEvent.symbol}:${address}:${reason}`;
+    if (!touches.has(key)) {
+      touches.set(key, {
+        eventIndex,
+        tokenSymbol: decodedEvent.symbol,
+        chainName: decodedEvent.chainName,
+        address,
+        reason,
+      });
+    }
+  }
+
+  return [...touches.values()];
+}
+
+function collectLedgerEvents(tx: TransactionData): ParsedTokenLedgerEvent[] {
+  const ledgerEvents: ParsedTokenLedgerEvent[] = [];
+  const txEvents = tx.events ?? [];
+
+  for (const [eventIndex, event] of txEvents.entries()) {
+    if (!isTokenSupplyEvent(event)) {
+      continue;
+    }
+
+    const decodedEvent = decodeTokenEvent(event, eventIndex);
+    if (!decodedEvent) {
+      continue;
+    }
+
+    const address = String(event.address ?? "").trim();
+    if (!address) {
+      continue;
+    }
+
+    const timestampSeconds = Number(tx.timestamp ?? 0);
+    const eventKind =
+      event.kind.toLowerCase() === "tokenburn" ? "burn" : "mint";
+
+    ledgerEvents.push({
+      eventIndex,
+      txHash: tx.hash,
+      blockHeight: Number(tx.blockHeight ?? 0),
+      timestamp: new Date(timestampSeconds * 1000),
+      tokenSymbol: decodedEvent.symbol,
+      chainName: decodedEvent.chainName,
+      address,
+      relatedAddress: String(event.contract ?? "").trim() || null,
+      eventKind,
+      amount: decodedEvent.value,
+      metadata: {
+        sender: tx.sender,
+        gasPayer: tx.gasPayer,
+        state: tx.state,
+        contract: event.contract,
+        eventKinds: [event.kind],
+        ...(syncConfig.captureRawEvents ? { rawEvents: [event] } : {}),
+      },
+    });
+  }
+
+  return ledgerEvents;
+}
+
+function collectTouchedNodePairs(
+  touches: ParsedBalanceTouch[],
+): Array<{ address: string; tokenSymbol: string }> {
+  const pairs = new Map<string, { address: string; tokenSymbol: string }>();
+
+  for (const touch of touches) {
+    const address = String(touch.address ?? "").trim();
+
+    if (!address) {
+      continue;
+    }
+
+    const key = `${touch.tokenSymbol}:${address}`;
+    if (!pairs.has(key)) {
+      pairs.set(key, {
+        address,
+        tokenSymbol: touch.tokenSymbol,
+      });
+    }
+  }
+
+  return [...pairs.values()];
+}
+
 export function extractTransfersFromBlock(
   block: Block,
   fallbackBlockHeight?: number,
 ): ParsedBlockResult {
   const resolvedBlockHeight = resolveBlockHeight(block, fallbackBlockHeight);
   const transfers: ParsedTransfer[] = [];
+  const ledgerEvents: ParsedTokenLedgerEvent[] = [];
+  const balanceTouches: ParsedBalanceTouch[] = [];
 
   for (const tx of block.txs ?? []) {
     if (normalizeState(tx.state) === "fault") {
       continue;
     }
 
-    for (const transfer of pairTransferEvents(tx)) {
+    const txTransfers = pairTransferEvents(tx);
+    const txLedgerEvents = collectLedgerEvents(tx);
+    const txTouches = collectBalanceTouches(tx);
+
+    for (const transfer of txTransfers) {
       transfers.push({
         ...transfer,
         blockHeight: resolvedBlockHeight,
         timestamp: getTimestamp(tx, block),
       });
     }
+
+    for (const touch of txTouches) {
+      balanceTouches.push(touch);
+    }
+
+    for (const ledgerEvent of txLedgerEvents) {
+      ledgerEvents.push({
+        ...ledgerEvent,
+        blockHeight: resolvedBlockHeight,
+        timestamp: getTimestamp(tx, block),
+      });
+    }
   }
+
+  const touchedNodePairs = collectTouchedNodePairs(balanceTouches);
+  const tokenSymbols = [
+    ...new Set(balanceTouches.map((touch) => touch.tokenSymbol)),
+  ];
 
   return {
     blockHeight: resolvedBlockHeight,
     transferCount: transfers.length,
-    tokenSymbols: [
-      ...new Set(transfers.map((transfer) => transfer.tokenSymbol)),
-    ],
+    tokenSymbols,
     transfers,
+    ledgerEvents,
+    touchedNodePairs,
   };
 }

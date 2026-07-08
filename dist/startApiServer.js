@@ -62292,6 +62292,24 @@ var databaseConfig = {
   database: process.env.PGDATABASE,
   ssl: readBoolean("PGSSL", false)
 };
+var connectionPoolConfig = {
+  connectionString: process.env.CONNECTION_POOL || process.env.DATABASE_URL,
+  host: process.env.PGHOST,
+  port: process.env.PGPORT ? readNumber("PGPORT", 5432) : void 0,
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
+  database: process.env.PGDATABASE,
+  ssl: readBoolean("PGSSL", false)
+};
+var cacheDatabaseConfig = {
+  connectionString: process.env.CACHE_DATABASE_URL,
+  host: process.env.CACHE_PGHOST,
+  port: process.env.CACHE_PGPORT ? readNumber("CACHE_PGPORT", 5432) : void 0,
+  user: process.env.CACHE_PGUSER,
+  password: process.env.CACHE_PGPASSWORD,
+  database: process.env.CACHE_PGDATABASE,
+  ssl: readBoolean("CACHE_PGSSL", readBoolean("PGSSL", false))
+};
 
 // node_modules/phantasma-sdk-ts/dist/esm/utils/logger.js
 var noop = () => {
@@ -69744,66 +69762,6 @@ function createPhantasmaRpcClient() {
   return new PhantasmaRpcClient();
 }
 
-// src/responseCache.ts
-var SimpleCache = class {
-  cache = /* @__PURE__ */ new Map();
-  set(key, value, ttlMs) {
-    this.cache.set(key, {
-      value,
-      expiresAt: Date.now() + ttlMs
-    });
-  }
-  get(key) {
-    const entry = this.cache.get(key);
-    if (!entry) {
-      return null;
-    }
-    if (Date.now() > entry.expiresAt) {
-      this.cache.delete(key);
-      return null;
-    }
-    return entry.value;
-  }
-  clear(keyPattern) {
-    if (!keyPattern) {
-      this.cache.clear();
-      return;
-    }
-    for (const key of this.cache.keys()) {
-      if (keyPattern.test(key)) {
-        this.cache.delete(key);
-      }
-    }
-  }
-  size() {
-    return this.cache.size;
-  }
-};
-var responseCache = new SimpleCache();
-function cacheMiddleware(cacheKey, ttlMs) {
-  return (_request, response, next) => {
-    const cached = responseCache.get(cacheKey);
-    if (cached) {
-      response.setHeader("X-Cache", "HIT");
-      response.json(JSON.parse(cached));
-      return;
-    }
-    const originalJson = response.json.bind(response);
-    response.json = function(data) {
-      try {
-        responseCache.set(cacheKey, JSON.stringify(data), ttlMs);
-      } catch {
-      }
-      return originalJson(data);
-    };
-    response.setHeader("X-Cache", "MISS");
-    next();
-  };
-}
-function invalidateCache(pattern) {
-  responseCache.clear(pattern);
-}
-
 // node_modules/pg/esm/index.mjs
 var import_lib = __toESM(require_lib7(), 1);
 var Client = import_lib.default.Client;
@@ -69822,40 +69780,56 @@ var defaults = import_lib.default.defaults;
 var CHAIN_SYNC_TOKEN = "__chain__";
 
 // src/database.ts
-function buildPoolConfig() {
+var isApiProcess = process.argv.some(
+  (arg) => /(^|[\\/])startApiServer(\.ts|\.js)?$/i.test(String(arg || ""))
+);
+function buildPoolConfig(config, options = {}) {
   const baseConfig = {
-    // Connection pool optimization for better performance under load
-    min: 5,
-    // Keep this many connections ready
-    max: 20,
-    // Allow up to this many concurrent connections
+    // Keep a very small local queue when the upstream DATABASE_URL is already a pooler.
+    min: options.useExternalPooler ? 0 : 2,
+    max: options.useExternalPooler ? 4 : 20,
     idleTimeoutMillis: 3e4,
     // Close idle connections after 30 seconds
     connectionTimeoutMillis: 5e3,
     // Wait up to 5 seconds to acquire a connection
-    statement_timeout: 3e4,
-    // Statement timeout of 30 seconds
     query_timeout: 3e4
     // Query timeout of 30 seconds
   };
-  if (databaseConfig.connectionString) {
+  if (config.connectionString) {
     return {
-      connectionString: databaseConfig.connectionString,
-      ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : void 0,
+      connectionString: config.connectionString,
+      ssl: config.ssl ? { rejectUnauthorized: false } : void 0,
       ...baseConfig
     };
   }
   return {
-    host: databaseConfig.host,
-    port: databaseConfig.port,
-    user: databaseConfig.user,
-    password: databaseConfig.password,
-    database: databaseConfig.database,
-    ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : void 0,
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database,
+    ssl: config.ssl ? { rejectUnauthorized: false } : void 0,
     ...baseConfig
   };
 }
-var databasePool = new Pool(buildPoolConfig());
+var mainDatabaseConfig = isApiProcess ? connectionPoolConfig : databaseConfig;
+var mainUsesExternalPooler = isApiProcess && Boolean(connectionPoolConfig.connectionString) && connectionPoolConfig.connectionString !== databaseConfig.connectionString;
+var databasePool = new Pool(
+  buildPoolConfig(mainDatabaseConfig, {
+    useExternalPooler: mainUsesExternalPooler
+  })
+);
+var hasDedicatedCacheDatabase = Boolean(
+  cacheDatabaseConfig.connectionString || cacheDatabaseConfig.host || cacheDatabaseConfig.database
+);
+var cachePoolConfig = hasDedicatedCacheDatabase ? buildPoolConfig(cacheDatabaseConfig) : buildPoolConfig(mainDatabaseConfig, {
+  useExternalPooler: mainUsesExternalPooler
+});
+if (hasDedicatedCacheDatabase) {
+  cachePoolConfig.min = 1;
+  cachePoolConfig.max = 5;
+}
+var cacheQueryPool = new Pool(cachePoolConfig);
 databasePool.on("error", (error) => {
   const maybeError = error;
   console.error(
@@ -69877,8 +69851,67 @@ databasePool.on("error", (error) => {
     })
   );
 });
+cacheQueryPool.on("error", (error) => {
+  const maybeError = error;
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event: "cache_database_pool_error",
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      message: maybeError.message,
+      code: maybeError.code ?? null,
+      errno: maybeError.errno ?? null,
+      syscall: maybeError.syscall ?? null,
+      address: maybeError.address ?? null,
+      port: maybeError.port ?? null,
+      pool: {
+        totalCount: cacheQueryPool.totalCount,
+        idleCount: cacheQueryPool.idleCount,
+        waitingCount: cacheQueryPool.waitingCount
+      }
+    })
+  );
+});
 var READ_RETRY_ATTEMPTS = 3;
 var READ_RETRY_BASE_DELAY_MS = 150;
+var queryCacheTableMissingLogged = false;
+function isUndefinedTableError(error) {
+  return error?.code === "42P01";
+}
+function logQueryCacheTableMissingOnce() {
+  if (queryCacheTableMissingLogged) {
+    return;
+  }
+  queryCacheTableMissingLogged = true;
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      event: "query_cache_table_missing",
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      message: "api_query_cache table not found. Apply migration 013_query_cache.sql to enable persistent API caching."
+    })
+  );
+}
+function parseTokenSymbolFromCacheKey(cacheKey) {
+  const tokenScopedPrefixes = [
+    "token-metadata:",
+    "top-holders:",
+    "token-graph-max:",
+    "token-graph:",
+    "address-subgraph:",
+    "address-connections:",
+    "trace-paths:"
+  ];
+  for (const prefix of tokenScopedPrefixes) {
+    if (!cacheKey.startsWith(prefix)) {
+      continue;
+    }
+    const remainder = cacheKey.slice(prefix.length);
+    const tokenSymbol = remainder.split(":")[0]?.trim().toUpperCase();
+    return tokenSymbol || null;
+  }
+  return null;
+}
 function isRetryableReadError(error) {
   const candidate = error;
   const code = String(candidate?.code ?? "").toUpperCase();
@@ -70037,7 +70070,7 @@ function mapTransactionRow(row) {
   };
 }
 async function closeDatabasePool() {
-  await databasePool.end();
+  await Promise.all([databasePool.end(), cacheQueryPool.end()]);
 }
 async function testDatabaseConnection() {
   await queryReadWithRetry("SELECT 1", [], "health_check");
@@ -70194,7 +70227,7 @@ async function getTopHolders(tokenSymbol, limit) {
     `WITH node_balances AS (
        SELECT address,
               balance AS net_balance
-         FROM nodes
+         FROM public.nodes
         WHERE token_symbol = $1
           AND balance IS NOT NULL
           AND balance > 0
@@ -70206,14 +70239,14 @@ async function getTopHolders(tokenSymbol, limit) {
            SELECT to_address AS address,
                   COALESCE(SUM(amount), 0) AS received,
                   0::numeric               AS sent
-             FROM transactions
+             FROM public.transactions
             WHERE token_symbol = $1
             GROUP BY to_address
            UNION ALL
            SELECT from_address AS address,
                   0::numeric             AS received,
                   COALESCE(SUM(amount), 0) AS sent
-             FROM transactions
+             FROM public.transactions
             WHERE token_symbol = $1
             GROUP BY from_address
          ) t
@@ -70252,7 +70285,7 @@ async function getTopHolderGraphNodes(tokenSymbol, limit) {
               balance_normalized,
               label,
               metadata
-         FROM nodes
+         FROM public.nodes
         WHERE token_symbol = $1
           AND balance IS NOT NULL
           AND balance > 0
@@ -70264,14 +70297,14 @@ async function getTopHolderGraphNodes(tokenSymbol, limit) {
            SELECT to_address AS address,
                   COALESCE(SUM(amount), 0) AS received,
                   0::numeric AS sent
-             FROM transactions
+             FROM public.transactions
             WHERE token_symbol = $1
             GROUP BY to_address
            UNION ALL
            SELECT from_address AS address,
                   0::numeric AS received,
                   COALESCE(SUM(amount), 0) AS sent
-             FROM transactions
+             FROM public.transactions
             WHERE token_symbol = $1
             GROUP BY from_address
          ) t
@@ -70301,7 +70334,7 @@ async function getTopHolderGraphNodes(tokenSymbol, limit) {
             holders.metadata,
             tm.decimals
        FROM holders
-       LEFT JOIN token_metadata tm
+      LEFT JOIN public.token_metadata tm
          ON tm.token_symbol = $1
       ORDER BY holders.net_balance DESC
       LIMIT $2`,
@@ -70319,7 +70352,7 @@ async function getTopHolderGraphNodes(tokenSymbol, limit) {
 async function getAvailableTokens() {
   const result = await queryReadWithRetry(
     `SELECT DISTINCT token_symbol
-       FROM transactions
+      FROM public.transactions
       WHERE token_symbol <> $1
       ORDER BY token_symbol ASC`,
     [CHAIN_SYNC_TOKEN],
@@ -70334,7 +70367,7 @@ async function getTokenMetadata(tokenSymbol) {
             decimals,
             (
               SELECT COUNT(1)
-                FROM nodes
+                FROM public.nodes
                WHERE token_symbol = tm.token_symbol
             )::bigint AS holder_count,
             current_supply_raw,
@@ -70344,7 +70377,7 @@ async function getTokenMetadata(tokenSymbol) {
             flags,
             metadata,
             updated_at
-       FROM token_metadata tm
+      FROM public.token_metadata tm
       WHERE token_symbol = $1`,
     [tokenSymbol],
     "get_token_metadata"
@@ -70362,14 +70395,14 @@ async function getFullTokenGraph(tokenSymbol, options = {}) {
   const edgeLimit = Number.isFinite(Number(options.edgeLimit)) ? Math.max(0, Math.floor(Number(options.edgeLimit) || 0)) : 0;
   const edgesQuery = edgeLimit > 0 ? {
     text: `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
-                   FROM edges
+                   FROM public.edges
                   WHERE token_symbol = $1
                   ORDER BY id ASC
                   LIMIT $2`,
     values: [tokenSymbol, edgeLimit]
   } : {
     text: `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
-                   FROM edges
+                   FROM public.edges
                   WHERE token_symbol = $1
                   ORDER BY id ASC`,
     values: [tokenSymbol]
@@ -70387,7 +70420,7 @@ async function getFullTokenGraph(tokenSymbol, options = {}) {
   }
   const nodesResult = addressSet.size ? await queryReadWithRetry(
     `SELECT address, token_symbol, balance, balance_normalized, label, metadata
-           FROM nodes
+           FROM public.nodes
           WHERE token_symbol = $1
             AND address = ANY($2::text[])
           ORDER BY address ASC`,
@@ -70446,6 +70479,107 @@ function subgraphCacheSet(key, result) {
 function clearSubgraphCache() {
   subgraphCache.clear();
 }
+async function getCachedApiResponse(cacheKey) {
+  try {
+    const result = await cacheQueryPool.query(
+      `SELECT payload::text AS payload,
+              expires_at,
+              updated_at
+         FROM public.api_query_cache
+        WHERE cache_key = $1
+        LIMIT 1`,
+      [cacheKey]
+    );
+    if (result.rowCount === 0) {
+      return {
+        status: "miss",
+        payload: null
+      };
+    }
+    const cacheRow = result.rows[0];
+    const expiresAt = new Date(cacheRow.expires_at).getTime();
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+      return {
+        status: "stale",
+        payload: null
+      };
+    }
+    const tokenSymbol = parseTokenSymbolFromCacheKey(cacheKey);
+    if (tokenSymbol) {
+      const tokenSyncStateResult = await queryReadWithRetry(
+        `SELECT updated_at
+           FROM public.sync_state
+          WHERE token_symbol = $1
+          LIMIT 1`,
+        [tokenSymbol],
+        "cache_freshness_token_sync_state"
+      );
+      if (tokenSyncStateResult.rows.length > 0) {
+        const mainUpdatedAt = new Date(
+          tokenSyncStateResult.rows[0].updated_at
+        ).getTime();
+        const cacheUpdatedAt = new Date(cacheRow.updated_at).getTime();
+        if (Number.isFinite(mainUpdatedAt) && Number.isFinite(cacheUpdatedAt) && cacheUpdatedAt < mainUpdatedAt) {
+          return {
+            status: "stale",
+            payload: null
+          };
+        }
+      }
+    }
+    return {
+      status: "hit",
+      payload: cacheRow.payload
+    };
+  } catch (error) {
+    if (isUndefinedTableError(error)) {
+      logQueryCacheTableMissingOnce();
+      return {
+        status: "miss",
+        payload: null
+      };
+    }
+    throw error;
+  }
+}
+async function setCachedApiResponse(cacheKey, payloadJson, ttlMs) {
+  if (ttlMs <= 0) {
+    return;
+  }
+  try {
+    await cacheQueryPool.query(
+      `INSERT INTO public.api_query_cache (cache_key, payload, expires_at)
+       VALUES (
+         $1,
+         $2::jsonb,
+         NOW() + (($3::bigint) * INTERVAL '1 millisecond')
+       )
+       ON CONFLICT (cache_key)
+       DO UPDATE SET
+         payload = EXCLUDED.payload,
+         expires_at = EXCLUDED.expires_at,
+         updated_at = NOW()`,
+      [cacheKey, payloadJson, ttlMs]
+    );
+  } catch (error) {
+    if (isUndefinedTableError(error)) {
+      logQueryCacheTableMissingOnce();
+      return;
+    }
+    throw error;
+  }
+}
+async function clearApiQueryCache() {
+  try {
+    await cacheQueryPool.query("DELETE FROM public.api_query_cache");
+  } catch (error) {
+    if (isUndefinedTableError(error)) {
+      logQueryCacheTableMissingOnce();
+      return;
+    }
+    throw error;
+  }
+}
 async function getAddressSubgraph(tokenSymbol, rootAddress, requestedDepth, requestedEdgeLimit) {
   const depth = Math.min(
     Math.max(requestedDepth, 1),
@@ -70468,7 +70602,7 @@ async function getAddressSubgraph(tokenSymbol, rootAddress, requestedDepth, requ
               END AS address,
               walk.depth + 1 AS depth
          FROM walk
-         JOIN edges e
+         JOIN public.edges e
            ON e.token_symbol = $1
           AND (e.from_address = walk.address OR e.to_address = walk.address)
         WHERE walk.depth < $3
@@ -70489,7 +70623,7 @@ async function getAddressSubgraph(tokenSymbol, rootAddress, requestedDepth, requ
               e.tx_hash,
               e.event_index,
               LEAST(from_depth.depth, to_depth.depth) AS edge_depth
-         FROM edges e
+         FROM public.edges e
          JOIN address_depths from_depth
            ON from_depth.address = e.from_address
          JOIN address_depths to_depth
@@ -70526,7 +70660,7 @@ async function getAddressSubgraph(tokenSymbol, rootAddress, requestedDepth, requ
   }
   const nodesResult = await queryReadWithRetry(
     `SELECT address, token_symbol, balance, balance_normalized, label, metadata
-       FROM nodes
+      FROM public.nodes
       WHERE token_symbol = $1
         AND address = ANY($2::text[])
       ORDER BY address ASC`,
@@ -70688,7 +70822,7 @@ async function getTransactionsPage(options) {
               ELSE JSONB_AGG(metadata ORDER BY event_index)
             END AS metadata,
             COUNT(*) OVER () AS total
-       FROM transactions
+      FROM public.transactions
        ${whereClause}
       GROUP BY tx_hash,
                token_symbol,
@@ -70737,7 +70871,7 @@ async function getAddressConnections(tokenSymbol, address) {
        counterparty,
        total_volume,
        transaction_count
-     FROM address_connections
+    FROM public.address_connections
      WHERE token_symbol = $1
        AND address = $2
      ORDER BY total_volume DESC`,
@@ -70767,7 +70901,7 @@ async function findAddressPaths(options) {
     const frontierAddresses = [...frontier];
     const frontierResult = await queryReadWithRetry(
       `SELECT address, counterparty, total_volume
-         FROM address_connections
+         FROM public.address_connections
         WHERE token_symbol = $1
           AND address = ANY($2::text[])`,
       [options.tokenSymbol, frontierAddresses],
@@ -70799,7 +70933,7 @@ async function findAddressPaths(options) {
   if (stopAtTerminals) {
     const terminalLabelRows = await queryReadWithRetry(
       `SELECT address, label_type, label
-         FROM nodes
+         FROM public.nodes
         WHERE token_symbol = $1
           AND address = ANY($2::text[])`,
       [options.tokenSymbol, [...visited]],
@@ -71435,6 +71569,8 @@ async function getTokenTopMovers(tokenSymbol, windowDays, limit) {
        CASE
          WHEN COALESCE(b.balance, 0::numeric) > 0
            THEN ((COALESCE(l.balance, 0::numeric) - COALESCE(b.balance, 0::numeric)) / b.balance) * 100::numeric
+         WHEN COALESCE(b.balance, 0::numeric) = 0 AND COALESCE(l.balance, 0::numeric) > 0
+           THEN 100::numeric
          ELSE 0::numeric
        END AS delta_pct
      FROM latest_balances l
@@ -71450,6 +71586,94 @@ async function getTokenTopMovers(tokenSymbol, windowDays, limit) {
     [tokenSymbol, safeWindowDays, safeLimit]
   );
   return result.rows.map(mapTokenTopMoverRow);
+}
+
+// src/responseCache.ts
+var SimpleCache = class {
+  cache = /* @__PURE__ */ new Map();
+  set(key, value, ttlMs) {
+    this.cache.set(key, {
+      value,
+      expiresAt: Date.now() + ttlMs
+    });
+  }
+  get(key) {
+    const entry = this.cache.get(key);
+    if (!entry) {
+      return null;
+    }
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+  clear(keyPattern) {
+    if (!keyPattern) {
+      this.cache.clear();
+      return;
+    }
+    for (const key of this.cache.keys()) {
+      if (keyPattern.test(key)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+  size() {
+    return this.cache.size;
+  }
+};
+var responseCache = new SimpleCache();
+function cacheMiddleware(cacheKey, ttlMs) {
+  return async (_request, response, next) => {
+    const inMemoryCached = responseCache.get(cacheKey);
+    if (inMemoryCached) {
+      response.setHeader("X-Cache", "HIT");
+      response.json(JSON.parse(inMemoryCached));
+      return;
+    }
+    let databaseCached = null;
+    let databaseLookupStatus = "miss";
+    try {
+      const lookup = await getCachedApiResponse(cacheKey);
+      databaseLookupStatus = lookup.status;
+      databaseCached = lookup.payload;
+    } catch {
+      databaseCached = null;
+      databaseLookupStatus = "miss";
+    }
+    if (databaseCached) {
+      responseCache.set(cacheKey, databaseCached, ttlMs);
+      response.setHeader("X-Cache", "HIT");
+      response.json(JSON.parse(databaseCached));
+      return;
+    }
+    const originalJson = response.json.bind(response);
+    response.json = function(data) {
+      try {
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          const payloadJson = JSON.stringify(data);
+          responseCache.set(cacheKey, payloadJson, ttlMs);
+          void setCachedApiResponse(cacheKey, payloadJson, ttlMs).catch(() => {
+          });
+        }
+      } catch {
+      }
+      return originalJson(data);
+    };
+    response.setHeader(
+      "X-Cache",
+      databaseLookupStatus === "stale" ? "STALE" : "MISS"
+    );
+    next();
+  };
+}
+function invalidateCache(pattern) {
+  responseCache.clear(pattern);
+  if (!pattern) {
+    void clearApiQueryCache().catch(() => {
+    });
+  }
 }
 
 // src/apiServer.ts
@@ -71610,6 +71834,56 @@ function normalizeWithTopHolders(request) {
     return 10;
   }
   return 0;
+}
+function normalizeTokenQueryForCache(request) {
+  return String(request.query.token ?? "").trim().toUpperCase();
+}
+function normalizeAddressPathForCache(request) {
+  return String(request.params.address ?? "").trim();
+}
+function buildAddressSubgraphCacheKey(request) {
+  const tokenSymbol = normalizeTokenQueryForCache(request);
+  const address = normalizeAddressPathForCache(request);
+  const depth = readPositiveInt(
+    String(request.query.depth ?? ""),
+    apiConfig.graphDefaultDepth
+  );
+  const edgeLimit = readPositiveInt(
+    String(request.query.edgeLimit ?? ""),
+    apiConfig.graphMaxEdgesPerRequest
+  );
+  return `address-subgraph:${tokenSymbol}:${address}:${depth}:${edgeLimit}`;
+}
+function buildAddressConnectionsCacheKey(request) {
+  const tokenSymbol = normalizeTokenQueryForCache(request);
+  const address = normalizeAddressPathForCache(request);
+  return `address-connections:${tokenSymbol}:${address}`;
+}
+function buildTracePathsCacheKey(request) {
+  const tokenSymbol = normalizeTokenQueryForCache(request);
+  const fromAddress = String(request.query.from ?? "").trim();
+  const toAddress = String(request.query.to ?? "").trim();
+  const maxHops = clampInt(
+    readPositiveInt(
+      request.query.maxHops ? String(request.query.maxHops) : void 0,
+      5
+    ),
+    1,
+    8
+  );
+  const pathLimit = clampInt(
+    readPositiveInt(
+      request.query.limit ? String(request.query.limit) : void 0,
+      20
+    ),
+    1,
+    100
+  );
+  const stopAtTerminalsRaw = String(request.query.stopAtTerminals ?? "true").trim().toLowerCase();
+  const stopAtTerminals = !["false", "0", "no", "off"].includes(
+    stopAtTerminalsRaw
+  );
+  return `trace-paths:${tokenSymbol}:${fromAddress}:${toAddress}:${maxHops}:${pathLimit}:${stopAtTerminals ? "1" : "0"}`;
 }
 function handleRouteError(response, error) {
   if (error instanceof ApiError) {
@@ -71815,6 +72089,14 @@ function createApiApp(deps = defaultDeps) {
   );
   app.get(
     "/graph/address/:address",
+    (request, response, next) => {
+      const cacheKey = buildAddressSubgraphCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1e3)(
+        request,
+        response,
+        next
+      );
+    },
     async (request, response) => {
       try {
         const tokenSymbol = String(request.query.token ?? "").trim();
@@ -71893,6 +72175,14 @@ function createApiApp(deps = defaultDeps) {
   );
   app.get(
     "/connections/address/:address",
+    (request, response, next) => {
+      const cacheKey = buildAddressConnectionsCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1e3)(
+        request,
+        response,
+        next
+      );
+    },
     async (request, response) => {
       try {
         const tokenSymbol = String(request.query.token ?? "").trim();
@@ -71941,79 +72231,92 @@ function createApiApp(deps = defaultDeps) {
       }
     }
   );
-  app.get("/trace/paths", async (request, response) => {
-    try {
-      const tokenSymbol = String(request.query.token ?? "").trim();
-      const fromAddress = String(request.query.from ?? "").trim();
-      const toAddress = String(request.query.to ?? "").trim();
-      if (!tokenSymbol || !fromAddress || !toAddress) {
-        throw new ApiError(
-          400,
-          "INVALID_REQUEST",
-          "token, from, and to query parameters are required"
-        );
-      }
-      if (!isValidTokenSymbol(tokenSymbol)) {
-        throw new ApiError(
-          400,
-          "TOKEN_SYMBOL_INVALID",
-          "token query parameter is invalid",
-          { tokenSymbol }
-        );
-      }
-      if (!isValidAddress(fromAddress) || !isValidAddress(toAddress)) {
-        throw new ApiError(
-          400,
-          "ADDRESS_INVALID",
-          "from and to query parameters must be valid wallet addresses",
-          {
-            fromAddress,
-            toAddress
-          }
-        );
-      }
-      const maxHops = clampInt(
-        readPositiveInt(
-          request.query.maxHops ? String(request.query.maxHops) : void 0,
-          5
-        ),
-        1,
-        8
+  app.get(
+    "/trace/paths",
+    (request, response, next) => {
+      const cacheKey = buildTracePathsCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1e3)(
+        request,
+        response,
+        next
       );
-      const pathLimit = clampInt(
-        readPositiveInt(
-          request.query.limit ? String(request.query.limit) : void 0,
-          20
-        ),
-        1,
-        100
-      );
-      const stopAtTerminalsRaw = String(request.query.stopAtTerminals ?? "true").trim().toLowerCase();
-      const stopAtTerminals = !["false", "0", "no", "off"].includes(
-        stopAtTerminalsRaw
-      );
-      const items = await deps.findAddressPathsImpl({
-        tokenSymbol,
-        fromAddress,
-        toAddress,
-        maxHops,
-        pathLimit,
-        stopAtTerminals
-      });
-      sendSuccess(request, response, {
-        tokenSymbol,
-        fromAddress,
-        toAddress,
-        maxHops,
-        limit: pathLimit,
-        stopAtTerminals,
-        totalPaths: items.length,
-        items
-      });
-    } catch (error) {
-      handleRouteError(response, error);
+    },
+    async (request, response) => {
+      try {
+        const tokenSymbol = String(request.query.token ?? "").trim();
+        const fromAddress = String(request.query.from ?? "").trim();
+        const toAddress = String(request.query.to ?? "").trim();
+        if (!tokenSymbol || !fromAddress || !toAddress) {
+          throw new ApiError(
+            400,
+            "INVALID_REQUEST",
+            "token, from, and to query parameters are required"
+          );
+        }
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "token query parameter is invalid",
+            { tokenSymbol }
+          );
+        }
+        if (!isValidAddress(fromAddress) || !isValidAddress(toAddress)) {
+          throw new ApiError(
+            400,
+            "ADDRESS_INVALID",
+            "from and to query parameters must be valid wallet addresses",
+            {
+              fromAddress,
+              toAddress
+            }
+          );
+        }
+        const maxHops = clampInt(
+          readPositiveInt(
+            request.query.maxHops ? String(request.query.maxHops) : void 0,
+            5
+          ),
+          1,
+          8
+        );
+        const pathLimit = clampInt(
+          readPositiveInt(
+            request.query.limit ? String(request.query.limit) : void 0,
+            20
+          ),
+          1,
+          100
+        );
+        const stopAtTerminalsRaw = String(
+          request.query.stopAtTerminals ?? "true"
+        ).trim().toLowerCase();
+        const stopAtTerminals = !["false", "0", "no", "off"].includes(
+          stopAtTerminalsRaw
+        );
+        const items = await deps.findAddressPathsImpl({
+          tokenSymbol,
+          fromAddress,
+          toAddress,
+          maxHops,
+          pathLimit,
+          stopAtTerminals
+        });
+        sendSuccess(request, response, {
+          tokenSymbol,
+          fromAddress,
+          toAddress,
+          maxHops,
+          limit: pathLimit,
+          stopAtTerminals,
+          totalPaths: items.length,
+          items
+        });
+      } catch (error) {
+        handleRouteError(response, error);
+      }
     }
-  });
+  );
   app.get(
     "/tokens/:tokenSymbol/top-holders",
     (request, response, next) => {
