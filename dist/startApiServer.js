@@ -65962,26 +65962,7 @@ var PBinaryWriter = class {
     return this.writeBigIntegerString(value.toString());
   }
   writeBigIntegerString(value) {
-    let bytes = [];
-    if (value == "0") {
-      bytes = [0];
-    } else if (value.startsWith("-1")) {
-      throw new Error("Unsigned bigint serialization not suppoted");
-    } else {
-      let hex = BigInt(value).toString(16);
-      if (hex.length % 2)
-        hex = "0" + hex;
-      const len = hex.length / 2;
-      let i = 0;
-      let j = 0;
-      while (i < len) {
-        bytes.unshift(parseInt(hex.slice(j, j + 2), 16));
-        i += 1;
-        j += 2;
-      }
-      bytes.push(0);
-    }
-    return this.writeByteArray(bytes);
+    return this.writeByteArray(bigIntToTwosComplementLE_phantasma(BigInt(value)));
   }
   writeSignature(signature) {
     if (!signature) {
@@ -67610,6 +67591,7 @@ var TokenInfoBuilder = class {
     }
     const tokenInfo = new TokenInfo();
     tokenInfo.maxSupply = maxSupply;
+    const isUnlimited = maxSupply.toBigInt() === 0n;
     tokenInfo.flags = 0;
     if (isNFT) {
       if (!maxSupply.is8ByteSafe()) {
@@ -67617,7 +67599,7 @@ var TokenInfoBuilder = class {
       }
       tokenInfo.flags = CarbonTokenFlags.NonFungible;
     } else {
-      if (!maxSupply.is8ByteSafe()) {
+      if (isUnlimited || !maxSupply.is8ByteSafe()) {
         tokenInfo.flags = CarbonTokenFlags.BigFungible;
       }
     }
@@ -69783,6 +69765,11 @@ var CHAIN_SYNC_TOKEN = "__chain__";
 var isApiProcess = process.argv.some(
   (arg) => /(^|[\\/])startApiServer(\.ts|\.js)?$/i.test(String(arg || ""))
 );
+var isDirectDatabaseProcess = process.argv.some(
+  (arg) => /(^|[\\/])(backfill|backfillDryRun|syncNodeBalancesNormalized|cleanupBlockClaims|testDatabaseInserts|labelingDryRun|labelingReviewSample|_temp_restore_fungible_amounts)(\.ts|\.js)?$/i.test(
+    String(arg || "")
+  )
+);
 function buildPoolConfig(config, options = {}) {
   const baseConfig = {
     // Keep a very small local queue when the upstream DATABASE_URL is already a pooler.
@@ -69811,6 +69798,21 @@ function buildPoolConfig(config, options = {}) {
     ssl: config.ssl ? { rejectUnauthorized: false } : void 0,
     ...baseConfig
   };
+}
+if (isDirectDatabaseProcess && !databaseConfig.connectionString && !(databaseConfig.host && databaseConfig.port && databaseConfig.user && databaseConfig.database)) {
+  throw new Error(
+    "Direct database connection is required for worker/sync jobs. Set DATABASE_URL (or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE). CONNECTION_POOL is API-only."
+  );
+}
+if (isDirectDatabaseProcess && connectionPoolConfig.connectionString) {
+  console.info(
+    JSON.stringify({
+      level: "info",
+      event: "direct_database_mode",
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      message: "Worker/sync process detected; using DATABASE_URL/direct PG settings and ignoring CONNECTION_POOL."
+    })
+  );
 }
 var mainDatabaseConfig = isApiProcess ? connectionPoolConfig : databaseConfig;
 var mainUsesExternalPooler = isApiProcess && Boolean(connectionPoolConfig.connectionString) && connectionPoolConfig.connectionString !== databaseConfig.connectionString;
@@ -70050,11 +70052,13 @@ function mapTransactionRow(row) {
     eventIndex: row.event_index === null || row.event_index === void 0 ? null : Number(row.event_index),
     eventIndexes: Array.isArray(row.event_indexes) ? row.event_indexes.map((value) => Number(value)) : [],
     transferCount: Number(row.transfer_count ?? 1),
+    eventKind: row.event_kind === null ? "transfer" : String(row.event_kind),
     tokenSymbol: String(row.token_symbol),
     blockHeight: Number(row.block_height),
     timestamp: row.timestamp,
     fromAddress: String(row.from_address),
     toAddress: String(row.to_address),
+    relatedAddress: row.related_address === null ? null : String(row.related_address),
     amount: row.amount === null ? null : String(row.amount),
     amountNormalized: row.amount_normalized === null ? null : String(row.amount_normalized),
     metadata: row.metadata ?? null,
@@ -70062,10 +70066,12 @@ function mapTransactionRow(row) {
     event_index: row.event_index === null || row.event_index === void 0 ? null : Number(row.event_index),
     event_indexes: Array.isArray(row.event_indexes) ? row.event_indexes.map((value) => Number(value)) : [],
     transfer_count: Number(row.transfer_count ?? 1),
+    event_kind: row.event_kind === null ? "transfer" : String(row.event_kind),
     token_symbol: String(row.token_symbol),
     block_height: Number(row.block_height),
     from_address: String(row.from_address),
     to_address: String(row.to_address),
+    related_address: row.related_address === null ? null : String(row.related_address),
     amount_normalized: row.amount_normalized === null ? null : String(row.amount_normalized)
   };
 }
@@ -70369,6 +70375,7 @@ async function getTokenMetadata(tokenSymbol) {
               SELECT COUNT(1)
                 FROM public.nodes
                WHERE token_symbol = tm.token_symbol
+                 AND COALESCE(balance, 0) > 0
             )::bigint AS holder_count,
             current_supply_raw,
             current_supply_normalized,
@@ -70810,11 +70817,13 @@ async function getTransactionsPage(options) {
             NULL::integer AS event_index,
             ARRAY_AGG(event_index ORDER BY event_index) AS event_indexes,
             COUNT(*)::integer AS transfer_count,
+            MIN(event_kind) AS event_kind,
             token_symbol,
             block_height,
             timestamp,
             from_address,
             to_address,
+            MIN(related_address) AS related_address,
             SUM(amount) AS amount,
             SUM(amount_normalized) AS amount_normalized,
             CASE
@@ -70825,11 +70834,13 @@ async function getTransactionsPage(options) {
       FROM public.transactions
        ${whereClause}
       GROUP BY tx_hash,
+               event_kind,
                token_symbol,
                block_height,
                timestamp,
                from_address,
-               to_address
+               to_address,
+               related_address
       ORDER BY ${orderByClause}
       LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
@@ -71750,6 +71761,112 @@ function readStringList(value) {
 function clampInt(value, min, max) {
   return Math.max(min, Math.min(max, Math.floor(value)));
 }
+function addIntegerStrings(left, right) {
+  const leftValue = BigInt(String(left ?? "0"));
+  const rightValue = BigInt(String(right ?? "0"));
+  return (leftValue + rightValue).toString();
+}
+function readLiveTokenBalanceRaw(account, tokenSymbol) {
+  if (!account || typeof account !== "object") {
+    return "0";
+  }
+  const accountRecord = account;
+  const rawBalances = accountRecord.balances;
+  if (!Array.isArray(rawBalances)) {
+    return tokenSymbol === "SOUL" ? addIntegerStrings("0", accountRecord.stake) : tokenSymbol === "KCAL" ? addIntegerStrings("0", accountRecord.unclaimed) : "0";
+  }
+  for (const item of rawBalances) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const symbol = String(item.symbol ?? "").trim();
+    if (symbol !== tokenSymbol) {
+      continue;
+    }
+    const amount = item.amount;
+    if (symbol === "SOUL") {
+      return addIntegerStrings(amount, accountRecord.stake);
+    }
+    if (symbol === "KCAL") {
+      return addIntegerStrings(amount, accountRecord.unclaimed);
+    }
+    return String(amount ?? "0");
+  }
+  return "0";
+}
+function normalizeRawAmount2(rawAmount, decimals) {
+  const safeRaw = String(rawAmount ?? "0").trim();
+  if (!/^-?\d+$/.test(safeRaw)) {
+    return "0";
+  }
+  const negative = safeRaw.startsWith("-");
+  const digits = negative ? safeRaw.slice(1) : safeRaw;
+  const safeDigits = digits.replace(/^0+(?=\d)/, "") || "0";
+  const safeDecimals = Math.max(0, Math.floor(decimals));
+  if (safeDecimals === 0) {
+    return `${negative ? "-" : ""}${safeDigits}`;
+  }
+  const padded = safeDigits.padStart(safeDecimals + 1, "0");
+  const splitAt = padded.length - safeDecimals;
+  const integerPart = padded.slice(0, splitAt);
+  const fractionalPart = padded.slice(splitAt).replace(/0+$/, "");
+  if (!fractionalPart) {
+    return `${negative ? "-" : ""}${integerPart}`;
+  }
+  return `${negative ? "-" : ""}${integerPart}.${fractionalPart}`;
+}
+function readPositiveNumberFromUnknown(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+async function reconcileTokenGraphWithLiveBalances(deps, tokenSymbol, graph, metadata) {
+  const graphRecord = graph && typeof graph === "object" ? graph : null;
+  const nodes = Array.isArray(graphRecord?.nodes) ? graphRecord.nodes : null;
+  if (!nodes || nodes.length === 0) {
+    return graph;
+  }
+  const metadataRecord = metadata && typeof metadata === "object" ? metadata : null;
+  const currentSupply = readPositiveNumberFromUnknown(
+    metadataRecord?.currentSupplyNormalized
+  );
+  if (currentSupply === null || currentSupply <= 0) {
+    return graph;
+  }
+  const nodeTotal = nodes.reduce((sum, node) => {
+    const balance = readPositiveNumberFromUnknown(node.balanceNormalized) ?? readPositiveNumberFromUnknown(node.balance) ?? 0;
+    return sum + balance;
+  }, 0);
+  if (nodeTotal <= currentSupply + 1e-9) {
+    return graph;
+  }
+  const decimals = Math.max(
+    0,
+    Math.floor(Number(metadataRecord?.decimals ?? 0) || 0)
+  );
+  const refreshedNodes = await Promise.all(
+    nodes.map(async (node) => {
+      const address = String(node.address ?? "").trim();
+      if (!address) {
+        return node;
+      }
+      try {
+        const account = await deps.rpcClient.getAccount(address);
+        const liveBalanceRaw = readLiveTokenBalanceRaw(account, tokenSymbol);
+        return {
+          ...node,
+          balance: liveBalanceRaw,
+          balanceNormalized: normalizeRawAmount2(liveBalanceRaw, decimals)
+        };
+      } catch {
+        return node;
+      }
+    })
+  );
+  return {
+    ...graphRecord,
+    nodes: refreshedNodes
+  };
+}
 function isValidTokenSymbol(rawToken) {
   const token = String(rawToken || "").trim();
   return /^[A-Z0-9_-]{1,16}$/i.test(token);
@@ -71935,6 +72052,17 @@ async function sendTokenGraphResponse(request, response, deps, tokenSymbol, incl
   }
   const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes ?? [] : [];
   const graphEdges = Array.isArray(graph?.edges) ? graph.edges ?? [] : [];
+  if (mode === "standard" && graphNodes.length > 0) {
+    const metadata = await deps.getTokenMetadataImpl(tokenSymbol);
+    graph = await reconcileTokenGraphWithLiveBalances(
+      deps,
+      tokenSymbol,
+      graph,
+      metadata
+    );
+  }
+  const responseNodes = Array.isArray(graph?.nodes) ? graph.nodes ?? [] : [];
+  const responseEdges = Array.isArray(graph?.edges) ? graph.edges ?? [] : [];
   sendSuccess(request, response, graph, {
     isPartial: fallbackApplied,
     mode,
@@ -71946,8 +72074,8 @@ async function sendTokenGraphResponse(request, response, deps, tokenSymbol, incl
       topHoldersLimit: includeTopHolders,
       edgeLimit: effectiveEdgeLimit
     } : null,
-    totalNodeCount: graphNodes.length,
-    totalEdgeCount: graphEdges.length
+    totalNodeCount: responseNodes.length,
+    totalEdgeCount: responseEdges.length
   });
 }
 function createApiApp(deps = defaultDeps) {
