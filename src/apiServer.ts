@@ -71,11 +71,16 @@ type ResponseMeta = Record<string, unknown>;
 type CacheMiddleware = (
   cacheKey: string,
   ttlMs: number,
-) => (request: Request, response: Response, next: NextFunction) => void;
+) => (
+  request: Request,
+  response: Response,
+  next: NextFunction,
+) => void | Promise<void>;
 
 export type ApiServerDeps = {
   rpcClient: {
     getBlockHeight: () => Promise<number | string>;
+    getAccount: (address: string) => Promise<unknown>;
   };
   cacheMiddlewareImpl: CacheMiddleware;
   invalidateCacheImpl: () => void;
@@ -231,6 +236,168 @@ function clampInt(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
+function addIntegerStrings(left: unknown, right: unknown): string {
+  const leftValue = BigInt(String(left ?? "0"));
+  const rightValue = BigInt(String(right ?? "0"));
+  return (leftValue + rightValue).toString();
+}
+
+function readLiveTokenBalanceRaw(
+  account: unknown,
+  tokenSymbol: string,
+): string {
+  if (!account || typeof account !== "object") {
+    return "0";
+  }
+
+  const accountRecord = account as {
+    balances?: unknown;
+    stake?: unknown;
+    unclaimed?: unknown;
+  };
+
+  const rawBalances = accountRecord.balances;
+  if (!Array.isArray(rawBalances)) {
+    return tokenSymbol === "SOUL"
+      ? addIntegerStrings("0", accountRecord.stake)
+      : tokenSymbol === "KCAL"
+        ? addIntegerStrings("0", accountRecord.unclaimed)
+        : "0";
+  }
+
+  for (const item of rawBalances) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const symbol = String((item as { symbol?: unknown }).symbol ?? "").trim();
+    if (symbol !== tokenSymbol) {
+      continue;
+    }
+
+    const amount = (item as { amount?: unknown }).amount;
+    if (symbol === "SOUL") {
+      return addIntegerStrings(amount, accountRecord.stake);
+    }
+
+    if (symbol === "KCAL") {
+      return addIntegerStrings(amount, accountRecord.unclaimed);
+    }
+
+    return String(amount ?? "0");
+  }
+
+  return "0";
+}
+
+function normalizeRawAmount(rawAmount: string, decimals: number): string {
+  const safeRaw = String(rawAmount ?? "0").trim();
+
+  if (!/^-?\d+$/.test(safeRaw)) {
+    return "0";
+  }
+
+  const negative = safeRaw.startsWith("-");
+  const digits = negative ? safeRaw.slice(1) : safeRaw;
+  const safeDigits = digits.replace(/^0+(?=\d)/, "") || "0";
+  const safeDecimals = Math.max(0, Math.floor(decimals));
+
+  if (safeDecimals === 0) {
+    return `${negative ? "-" : ""}${safeDigits}`;
+  }
+
+  const padded = safeDigits.padStart(safeDecimals + 1, "0");
+  const splitAt = padded.length - safeDecimals;
+  const integerPart = padded.slice(0, splitAt);
+  const fractionalPart = padded.slice(splitAt).replace(/0+$/, "");
+
+  if (!fractionalPart) {
+    return `${negative ? "-" : ""}${integerPart}`;
+  }
+
+  return `${negative ? "-" : ""}${integerPart}.${fractionalPart}`;
+}
+
+function readPositiveNumberFromUnknown(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+async function reconcileTokenGraphWithLiveBalances(
+  deps: ApiServerDeps,
+  tokenSymbol: string,
+  graph: unknown,
+  metadata: unknown,
+): Promise<unknown> {
+  const graphRecord =
+    graph && typeof graph === "object"
+      ? (graph as {
+          nodes?: Array<Record<string, unknown>>;
+          edges?: Array<Record<string, unknown>>;
+        })
+      : null;
+
+  const nodes = Array.isArray(graphRecord?.nodes) ? graphRecord.nodes : null;
+  if (!nodes || nodes.length === 0) {
+    return graph;
+  }
+
+  const metadataRecord =
+    metadata && typeof metadata === "object"
+      ? (metadata as { currentSupplyNormalized?: unknown; decimals?: unknown })
+      : null;
+  const currentSupply = readPositiveNumberFromUnknown(
+    metadataRecord?.currentSupplyNormalized,
+  );
+
+  if (currentSupply === null || currentSupply <= 0) {
+    return graph;
+  }
+
+  const nodeTotal = nodes.reduce((sum, node) => {
+    const balance =
+      readPositiveNumberFromUnknown(node.balanceNormalized) ??
+      readPositiveNumberFromUnknown(node.balance) ??
+      0;
+    return sum + balance;
+  }, 0);
+
+  if (nodeTotal <= currentSupply + 1e-9) {
+    return graph;
+  }
+
+  const decimals = Math.max(
+    0,
+    Math.floor(Number(metadataRecord?.decimals ?? 0) || 0),
+  );
+
+  const refreshedNodes = await Promise.all(
+    nodes.map(async (node) => {
+      const address = String(node.address ?? "").trim();
+      if (!address) {
+        return node;
+      }
+
+      try {
+        const account = await deps.rpcClient.getAccount(address);
+        const liveBalanceRaw = readLiveTokenBalanceRaw(account, tokenSymbol);
+        return {
+          ...node,
+          balance: liveBalanceRaw,
+          balanceNormalized: normalizeRawAmount(liveBalanceRaw, decimals),
+        };
+      } catch {
+        return node;
+      }
+    }),
+  );
+
+  return {
+    ...graphRecord,
+    nodes: refreshedNodes,
+  };
+}
+
 function isValidTokenSymbol(rawToken: string): boolean {
   const token = String(rawToken || "").trim();
   return /^[A-Z0-9_-]{1,16}$/i.test(token);
@@ -347,6 +514,67 @@ function normalizeWithTopHolders(request: Request): number {
   return 0;
 }
 
+function normalizeTokenQueryForCache(request: Request): string {
+  return String(request.query.token ?? "")
+    .trim()
+    .toUpperCase();
+}
+
+function normalizeAddressPathForCache(request: Request): string {
+  return String(request.params.address ?? "").trim();
+}
+
+function buildAddressSubgraphCacheKey(request: Request): string {
+  const tokenSymbol = normalizeTokenQueryForCache(request);
+  const address = normalizeAddressPathForCache(request);
+  const depth = readPositiveInt(
+    String(request.query.depth ?? ""),
+    apiConfig.graphDefaultDepth,
+  );
+  const edgeLimit = readPositiveInt(
+    String(request.query.edgeLimit ?? ""),
+    apiConfig.graphMaxEdgesPerRequest,
+  );
+
+  return `address-subgraph:${tokenSymbol}:${address}:${depth}:${edgeLimit}`;
+}
+
+function buildAddressConnectionsCacheKey(request: Request): string {
+  const tokenSymbol = normalizeTokenQueryForCache(request);
+  const address = normalizeAddressPathForCache(request);
+  return `address-connections:${tokenSymbol}:${address}`;
+}
+
+function buildTracePathsCacheKey(request: Request): string {
+  const tokenSymbol = normalizeTokenQueryForCache(request);
+  const fromAddress = String(request.query.from ?? "").trim();
+  const toAddress = String(request.query.to ?? "").trim();
+  const maxHops = clampInt(
+    readPositiveInt(
+      request.query.maxHops ? String(request.query.maxHops) : undefined,
+      5,
+    ),
+    1,
+    8,
+  );
+  const pathLimit = clampInt(
+    readPositiveInt(
+      request.query.limit ? String(request.query.limit) : undefined,
+      20,
+    ),
+    1,
+    100,
+  );
+  const stopAtTerminalsRaw = String(request.query.stopAtTerminals ?? "true")
+    .trim()
+    .toLowerCase();
+  const stopAtTerminals = !["false", "0", "no", "off"].includes(
+    stopAtTerminalsRaw,
+  );
+
+  return `trace-paths:${tokenSymbol}:${fromAddress}:${toAddress}:${maxHops}:${pathLimit}:${stopAtTerminals ? "1" : "0"}`;
+}
+
 function handleRouteError(response: Response, error: unknown): void {
   if (error instanceof ApiError) {
     sendError(
@@ -417,6 +645,23 @@ async function sendTokenGraphResponse(
     ? ((graph as { edges?: unknown[] }).edges ?? [])
     : [];
 
+  if (mode === "standard" && graphNodes.length > 0) {
+    const metadata = await deps.getTokenMetadataImpl(tokenSymbol);
+    graph = await reconcileTokenGraphWithLiveBalances(
+      deps,
+      tokenSymbol,
+      graph,
+      metadata,
+    );
+  }
+
+  const responseNodes = Array.isArray((graph as { nodes?: unknown[] })?.nodes)
+    ? ((graph as { nodes?: unknown[] }).nodes ?? [])
+    : [];
+  const responseEdges = Array.isArray((graph as { edges?: unknown[] })?.edges)
+    ? ((graph as { edges?: unknown[] }).edges ?? [])
+    : [];
+
   sendSuccess(request, response, graph, {
     isPartial: fallbackApplied,
     mode,
@@ -436,8 +681,8 @@ async function sendTokenGraphResponse(
             edgeLimit: effectiveEdgeLimit,
           }
         : null,
-    totalNodeCount: graphNodes.length,
-    totalEdgeCount: graphEdges.length,
+    totalNodeCount: responseNodes.length,
+    totalEdgeCount: responseEdges.length,
   });
 }
 
@@ -608,6 +853,14 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
 
   app.get(
     "/graph/address/:address",
+    (request: Request, response: Response, next) => {
+      const cacheKey = buildAddressSubgraphCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1000)(
+        request,
+        response,
+        next,
+      );
+    },
     async (request: Request, response: Response) => {
       try {
         const tokenSymbol = String(request.query.token ?? "").trim();
@@ -690,6 +943,14 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
 
   app.get(
     "/connections/address/:address",
+    (request: Request, response: Response, next) => {
+      const cacheKey = buildAddressConnectionsCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1000)(
+        request,
+        response,
+        next,
+      );
+    },
     async (request: Request, response: Response) => {
       try {
         const tokenSymbol = String(request.query.token ?? "").trim();
@@ -740,85 +1001,98 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
     },
   );
 
-  app.get("/trace/paths", async (request: Request, response: Response) => {
-    try {
-      const tokenSymbol = String(request.query.token ?? "").trim();
-      const fromAddress = String(request.query.from ?? "").trim();
-      const toAddress = String(request.query.to ?? "").trim();
-
-      if (!tokenSymbol || !fromAddress || !toAddress) {
-        throw new ApiError(
-          400,
-          "INVALID_REQUEST",
-          "token, from, and to query parameters are required",
-        );
-      }
-      if (!isValidTokenSymbol(tokenSymbol)) {
-        throw new ApiError(
-          400,
-          "TOKEN_SYMBOL_INVALID",
-          "token query parameter is invalid",
-          { tokenSymbol },
-        );
-      }
-      if (!isValidAddress(fromAddress) || !isValidAddress(toAddress)) {
-        throw new ApiError(
-          400,
-          "ADDRESS_INVALID",
-          "from and to query parameters must be valid wallet addresses",
-          {
-            fromAddress,
-            toAddress,
-          },
-        );
-      }
-
-      const maxHops = clampInt(
-        readPositiveInt(
-          request.query.maxHops ? String(request.query.maxHops) : undefined,
-          5,
-        ),
-        1,
-        8,
+  app.get(
+    "/trace/paths",
+    (request: Request, response: Response, next) => {
+      const cacheKey = buildTracePathsCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1000)(
+        request,
+        response,
+        next,
       );
-      const pathLimit = clampInt(
-        readPositiveInt(
-          request.query.limit ? String(request.query.limit) : undefined,
-          20,
-        ),
-        1,
-        100,
-      );
-      const stopAtTerminalsRaw = String(request.query.stopAtTerminals ?? "true")
-        .trim()
-        .toLowerCase();
-      const stopAtTerminals = !["false", "0", "no", "off"].includes(
-        stopAtTerminalsRaw,
-      );
+    },
+    async (request: Request, response: Response) => {
+      try {
+        const tokenSymbol = String(request.query.token ?? "").trim();
+        const fromAddress = String(request.query.from ?? "").trim();
+        const toAddress = String(request.query.to ?? "").trim();
 
-      const items = await deps.findAddressPathsImpl({
-        tokenSymbol,
-        fromAddress,
-        toAddress,
-        maxHops,
-        pathLimit,
-        stopAtTerminals,
-      });
+        if (!tokenSymbol || !fromAddress || !toAddress) {
+          throw new ApiError(
+            400,
+            "INVALID_REQUEST",
+            "token, from, and to query parameters are required",
+          );
+        }
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "token query parameter is invalid",
+            { tokenSymbol },
+          );
+        }
+        if (!isValidAddress(fromAddress) || !isValidAddress(toAddress)) {
+          throw new ApiError(
+            400,
+            "ADDRESS_INVALID",
+            "from and to query parameters must be valid wallet addresses",
+            {
+              fromAddress,
+              toAddress,
+            },
+          );
+        }
 
-      sendSuccess(request, response, {
-        tokenSymbol,
-        fromAddress,
-        toAddress,
-        maxHops,
-        limit: pathLimit,
-        stopAtTerminals,
-        totalPaths: items.length,
-        items,
-      });
-    } catch (error: unknown) {
-      handleRouteError(response, error);
-    }
-  });
+        const maxHops = clampInt(
+          readPositiveInt(
+            request.query.maxHops ? String(request.query.maxHops) : undefined,
+            5,
+          ),
+          1,
+          8,
+        );
+        const pathLimit = clampInt(
+          readPositiveInt(
+            request.query.limit ? String(request.query.limit) : undefined,
+            20,
+          ),
+          1,
+          100,
+        );
+        const stopAtTerminalsRaw = String(
+          request.query.stopAtTerminals ?? "true",
+        )
+          .trim()
+          .toLowerCase();
+        const stopAtTerminals = !["false", "0", "no", "off"].includes(
+          stopAtTerminalsRaw,
+        );
+
+        const items = await deps.findAddressPathsImpl({
+          tokenSymbol,
+          fromAddress,
+          toAddress,
+          maxHops,
+          pathLimit,
+          stopAtTerminals,
+        });
+
+        sendSuccess(request, response, {
+          tokenSymbol,
+          fromAddress,
+          toAddress,
+          maxHops,
+          limit: pathLimit,
+          stopAtTerminals,
+          totalPaths: items.length,
+          items,
+        });
+      } catch (error: unknown) {
+        handleRouteError(response, error);
+      }
+    },
+  );
 
   app.get(
     "/tokens/:tokenSymbol/top-holders",

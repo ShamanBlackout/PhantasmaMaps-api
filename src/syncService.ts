@@ -21,6 +21,7 @@ import {
   upsertAddressConnections,
   upsertNodes,
   upsertTokenMetadata,
+  upsertTokenLedgerEvents,
   upsertTransfers,
   withDatabaseTransaction,
 } from "./database";
@@ -66,6 +67,54 @@ function collectTouchedTokenDates(
   }
 
   return touched;
+}
+
+function collectNodeSeeds(parsedBlock: {
+  transfers: Array<{
+    txHash: string;
+    blockHeight: number;
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+  }>;
+  ledgerEvents: Array<{
+    txHash: string;
+    blockHeight: number;
+    tokenSymbol: string;
+    address: string;
+    relatedAddress: string | null;
+    eventKind: "burn" | "mint";
+  }>;
+}): Array<{
+  txHash: string;
+  blockHeight: number;
+  tokenSymbol: string;
+  fromAddress: string;
+  toAddress: string;
+}> {
+  const seeds: Array<{
+    txHash: string;
+    blockHeight: number;
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+  }> = [];
+
+  for (const transfer of parsedBlock.transfers) {
+    seeds.push(transfer);
+  }
+
+  for (const event of parsedBlock.ledgerEvents) {
+    seeds.push({
+      txHash: event.txHash,
+      blockHeight: event.blockHeight,
+      tokenSymbol: event.tokenSymbol,
+      fromAddress: event.address,
+      toAddress: event.address,
+    });
+  }
+
+  return seeds;
 }
 
 function sleep(delayMs: number): Promise<void> {
@@ -332,34 +381,6 @@ async function fetchNodeBalancesFromRpc(
   return balancesByNodeKey;
 }
 
-function collectTouchedNodePairs(
-  transfers: Array<{
-    tokenSymbol: string;
-    fromAddress: string;
-    toAddress: string;
-  }>,
-): Array<{ address: string; tokenSymbol: string }> {
-  const touchedPairs = new Map<
-    string,
-    { address: string; tokenSymbol: string }
-  >();
-
-  for (const transfer of transfers) {
-    for (const address of [transfer.fromAddress, transfer.toAddress]) {
-      const key = `${transfer.tokenSymbol}:${address}`;
-
-      if (!touchedPairs.has(key)) {
-        touchedPairs.set(key, {
-          address,
-          tokenSymbol: transfer.tokenSymbol,
-        });
-      }
-    }
-  }
-
-  return [...touchedPairs.values()];
-}
-
 async function refreshNodeBalancesFromRpc(
   nodePairs: Array<{ address: string; tokenSymbol: string }>,
 ): Promise<{ addressCount: number; updatedCount: number }> {
@@ -457,10 +478,12 @@ export async function processBlockHeight(
 
   const block = (await rpcClient.getBlockByHeight(blockHeight)) as Block;
   const parsedBlock = extractTransfersFromBlock(block, blockHeight);
-  const touchedNodePairs = collectTouchedNodePairs(parsedBlock.transfers);
+  const touchedNodePairs = parsedBlock.touchedNodePairs;
+  const nodeSeeds = collectNodeSeeds(parsedBlock);
+  const tokenActivity = [...parsedBlock.transfers, ...parsedBlock.ledgerEvents];
   const nodeBalances =
-    parsedBlock.transfers.length > 0
-      ? await fetchNodeBalancesFromRpc(parsedBlock.transfers)
+    nodeSeeds.length > 0
+      ? await fetchNodeBalancesFromRpc(nodeSeeds)
       : new Map<string, string>();
   const tokenMetadata =
     parsedBlock.tokenSymbols.length > 0
@@ -469,7 +492,7 @@ export async function processBlockHeight(
   const tokenMetadataBySymbol = new Map(
     tokenMetadata.map((item) => [item.tokenSymbol, item]),
   );
-  const touchedTokenDates = collectTouchedTokenDates(parsedBlock.transfers);
+  const touchedTokenDates = collectTouchedTokenDates(tokenActivity);
 
   await withDatabaseTransaction(async (client) => {
     if (tokenMetadata.length > 0) {
@@ -482,18 +505,29 @@ export async function processBlockHeight(
         parsedBlock.transfers,
         tokenMetadataBySymbol,
       );
-      await upsertNodes(
-        client,
-        parsedBlock.transfers,
-        nodeBalances,
-        new Map(tokenMetadata.map((item) => [item.tokenSymbol, item.decimals])),
-      );
       const insertedEdges = await upsertEdges(
         client,
         parsedBlock.transfers,
         tokenMetadataBySymbol,
       );
       await upsertAddressConnections(client, insertedEdges);
+    }
+
+    if (parsedBlock.ledgerEvents.length > 0) {
+      await upsertTokenLedgerEvents(
+        client,
+        parsedBlock.ledgerEvents,
+        tokenMetadataBySymbol,
+      );
+    }
+
+    if (nodeSeeds.length > 0) {
+      await upsertNodes(
+        client,
+        nodeSeeds,
+        nodeBalances,
+        new Map(tokenMetadata.map((item) => [item.tokenSymbol, item.decimals])),
+      );
     }
 
     await updateTokenSyncStateForBlock(

@@ -131,7 +131,12 @@ sql/migrations/009_performance_indexes.sql
 sql/migrations/010_address_connections.sql
 sql/migrations/011_analytics_daily.sql
 sql/migrations/012_labeling_support.sql
+sql/migrations/013_query_cache.sql
 ```
+
+If you use a dedicated cache database (`CACHE_DATABASE_URL`), apply
+`sql/migrations/013_query_cache.sql` to the cache DB connection.
+Apply all other migrations to the main database connection.
 
 4. Start the API or one of the worker commands.
 
@@ -157,6 +162,7 @@ psql $env:DATABASE_URL -f .\sql/migrations/009_performance_indexes.sql
 psql $env:DATABASE_URL -f .\sql/migrations/010_address_connections.sql
 psql $env:DATABASE_URL -f .\sql/migrations/011_analytics_daily.sql
 psql $env:DATABASE_URL -f .\sql/migrations/012_labeling_support.sql
+psql $env:DATABASE_URL -f .\sql/migrations/013_query_cache.sql
 ```
 
 Bash example:
@@ -175,7 +181,8 @@ for file in \
   sql/migrations/009_performance_indexes.sql \
   sql/migrations/010_address_connections.sql \
   sql/migrations/011_analytics_daily.sql \
-  sql/migrations/012_labeling_support.sql; do
+  sql/migrations/012_labeling_support.sql \
+  sql/migrations/013_query_cache.sql; do
   psql "$DATABASE_URL" -f "$file"
 done
 ```
@@ -220,11 +227,38 @@ The application loads environment variables through `process.loadEnvFile?.()` in
 `DATABASE_URL`
 : Full PostgreSQL connection string. If set, it takes precedence over discrete `PG*` settings.
 
+`CONNECTION_POOL`
+: Optional PostgreSQL pooler URL for API reads only (for example, managed PgBouncer endpoints).
+
+Connection mode by process:
+
+- `npm run api` uses `CONNECTION_POOL` when present, otherwise falls back to `DATABASE_URL`.
+- `npm run sync`, `npm run backfill`, `npm run sync:nodes-normalized`, `npm run cleanup:claims`, and other worker/maintenance jobs always use `DATABASE_URL` (or direct `PG*` settings).
+- If a worker/sync command is started without direct DB settings, startup fails fast instead of silently using `CONNECTION_POOL`.
+
 `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`
 : Optional discrete PostgreSQL connection settings.
 
 `PGSSL`
 : `true` enables TLS with `rejectUnauthorized: false`.
+
+### Dedicated Cache Database (Optional)
+
+Use these only if you want the API response cache table (`api_query_cache`) in a different PostgreSQL database than your main graph data.
+
+`CACHE_DATABASE_URL`
+: Full PostgreSQL connection string for cache storage only. If set, cache reads/writes use this DB while all other data stays on `DATABASE_URL`.
+
+`CACHE_PGHOST`, `CACHE_PGPORT`, `CACHE_PGUSER`, `CACHE_PGPASSWORD`, `CACHE_PGDATABASE`
+: Optional discrete cache PostgreSQL settings, equivalent to `PG*` but scoped to cache only.
+
+`CACHE_PGSSL`
+: `true` enables TLS for cache DB. Defaults to `PGSSL` when omitted.
+
+Cache freshness for token-scoped keys is validated against main DB
+`sync_state.updated_at` for that token symbol. If the cache row is older than
+the token sync checkpoint, the API treats it as stale, fetches fresh data from
+main DB, updates `api_query_cache`, and serves the fresh response.
 
 ### API
 

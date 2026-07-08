@@ -6,7 +6,13 @@ import {
   type QueryResultRow,
 } from "pg";
 import { PhantasmaTS } from "phantasma-sdk-ts";
-import { apiConfig, databaseConfig, syncConfig } from "./phantasma.config";
+import {
+  apiConfig,
+  cacheDatabaseConfig,
+  connectionPoolConfig,
+  databaseConfig,
+  syncConfig,
+} from "./phantasma.config";
 import {
   CHAIN_SYNC_TOKEN,
   type AddressSubgraphResult,
@@ -22,37 +28,116 @@ import {
   type TopHoldersResult,
 } from "./phantasma.types";
 
-function buildPoolConfig(): PoolConfig {
+type DbConnectionConfig = {
+  connectionString?: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  password?: string;
+  database?: string;
+  ssl: boolean;
+};
+
+const isApiProcess = process.argv.some((arg) =>
+  /(^|[\\/])startApiServer(\.ts|\.js)?$/i.test(String(arg || "")),
+);
+
+const isDirectDatabaseProcess = process.argv.some((arg) =>
+  /(^|[\\/])(backfill|backfillDryRun|syncNodeBalancesNormalized|cleanupBlockClaims|testDatabaseInserts|labelingDryRun|labelingReviewSample|_temp_restore_fungible_amounts)(\.ts|\.js)?$/i.test(
+    String(arg || ""),
+  ),
+);
+
+function buildPoolConfig(
+  config: DbConnectionConfig,
+  options: { useExternalPooler?: boolean } = {},
+): PoolConfig {
   const baseConfig: PoolConfig = {
-    // Connection pool optimization for better performance under load
-    min: 5, // Keep this many connections ready
-    max: 20, // Allow up to this many concurrent connections
+    // Keep a very small local queue when the upstream DATABASE_URL is already a pooler.
+    min: options.useExternalPooler ? 0 : 2,
+    max: options.useExternalPooler ? 4 : 20,
     idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
     connectionTimeoutMillis: 5000, // Wait up to 5 seconds to acquire a connection
-    statement_timeout: 30000, // Statement timeout of 30 seconds
     query_timeout: 30000, // Query timeout of 30 seconds
   };
 
-  if (databaseConfig.connectionString) {
+  if (config.connectionString) {
     return {
-      connectionString: databaseConfig.connectionString,
-      ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : undefined,
+      connectionString: config.connectionString,
+      ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
       ...baseConfig,
     };
   }
 
   return {
-    host: databaseConfig.host,
-    port: databaseConfig.port,
-    user: databaseConfig.user,
-    password: databaseConfig.password,
-    database: databaseConfig.database,
-    ssl: databaseConfig.ssl ? { rejectUnauthorized: false } : undefined,
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database,
+    ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
     ...baseConfig,
   };
 }
 
-export const databasePool = new Pool(buildPoolConfig());
+if (
+  isDirectDatabaseProcess &&
+  !databaseConfig.connectionString &&
+  !(
+    databaseConfig.host &&
+    databaseConfig.port &&
+    databaseConfig.user &&
+    databaseConfig.database
+  )
+) {
+  throw new Error(
+    "Direct database connection is required for worker/sync jobs. Set DATABASE_URL (or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE). CONNECTION_POOL is API-only.",
+  );
+}
+
+if (isDirectDatabaseProcess && connectionPoolConfig.connectionString) {
+  console.info(
+    JSON.stringify({
+      level: "info",
+      event: "direct_database_mode",
+      timestamp: new Date().toISOString(),
+      message:
+        "Worker/sync process detected; using DATABASE_URL/direct PG settings and ignoring CONNECTION_POOL.",
+    }),
+  );
+}
+
+const mainDatabaseConfig = isApiProcess ? connectionPoolConfig : databaseConfig;
+const mainUsesExternalPooler =
+  isApiProcess &&
+  Boolean(connectionPoolConfig.connectionString) &&
+  connectionPoolConfig.connectionString !== databaseConfig.connectionString;
+
+export const databasePool = new Pool(
+  buildPoolConfig(mainDatabaseConfig, {
+    useExternalPooler: mainUsesExternalPooler,
+  }),
+);
+
+const hasDedicatedCacheDatabase = Boolean(
+  cacheDatabaseConfig.connectionString ||
+  cacheDatabaseConfig.host ||
+  cacheDatabaseConfig.database,
+);
+
+const cachePoolConfig = hasDedicatedCacheDatabase
+  ? buildPoolConfig(cacheDatabaseConfig)
+  : buildPoolConfig(mainDatabaseConfig, {
+      useExternalPooler: mainUsesExternalPooler,
+    });
+
+// Use a smaller pool for cache because entries are short-lived and low-cost.
+if (hasDedicatedCacheDatabase) {
+  cachePoolConfig.min = 1;
+  cachePoolConfig.max = 5;
+}
+
+const cacheQueryPool = new Pool(cachePoolConfig);
 
 // Prevent process crashes when an idle pooled client disconnects unexpectedly.
 databasePool.on("error", (error: Error) => {
@@ -83,6 +168,34 @@ databasePool.on("error", (error: Error) => {
   );
 });
 
+cacheQueryPool.on("error", (error: Error) => {
+  const maybeError = error as Error & {
+    code?: string;
+    errno?: string | number;
+    syscall?: string;
+    address?: string;
+    port?: number;
+  };
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event: "cache_database_pool_error",
+      timestamp: new Date().toISOString(),
+      message: maybeError.message,
+      code: maybeError.code ?? null,
+      errno: maybeError.errno ?? null,
+      syscall: maybeError.syscall ?? null,
+      address: maybeError.address ?? null,
+      port: maybeError.port ?? null,
+      pool: {
+        totalCount: cacheQueryPool.totalCount,
+        idleCount: cacheQueryPool.idleCount,
+        waitingCount: cacheQueryPool.waitingCount,
+      },
+    }),
+  );
+});
+
 const RESTORE_BATCH_SIZE = 500;
 const READ_RETRY_ATTEMPTS = 3;
 const READ_RETRY_BASE_DELAY_MS = 150;
@@ -92,6 +205,64 @@ type RetryableDbError = Error & {
   errno?: string | number;
   syscall?: string;
 };
+
+type DatabaseError = Error & {
+  code?: string;
+};
+
+type CacheLookupStatus = "hit" | "miss" | "stale";
+
+type CacheLookupResult = {
+  status: CacheLookupStatus;
+  payload: string | null;
+};
+
+let queryCacheTableMissingLogged = false;
+
+function isUndefinedTableError(error: unknown): boolean {
+  return (error as DatabaseError | undefined)?.code === "42P01";
+}
+
+function logQueryCacheTableMissingOnce(): void {
+  if (queryCacheTableMissingLogged) {
+    return;
+  }
+
+  queryCacheTableMissingLogged = true;
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      event: "query_cache_table_missing",
+      timestamp: new Date().toISOString(),
+      message:
+        "api_query_cache table not found. Apply migration 013_query_cache.sql to enable persistent API caching.",
+    }),
+  );
+}
+
+function parseTokenSymbolFromCacheKey(cacheKey: string): string | null {
+  const tokenScopedPrefixes = [
+    "token-metadata:",
+    "top-holders:",
+    "token-graph-max:",
+    "token-graph:",
+    "address-subgraph:",
+    "address-connections:",
+    "trace-paths:",
+  ];
+
+  for (const prefix of tokenScopedPrefixes) {
+    if (!cacheKey.startsWith(prefix)) {
+      continue;
+    }
+
+    const remainder = cacheKey.slice(prefix.length);
+    const tokenSymbol = remainder.split(":")[0]?.trim().toUpperCase();
+    return tokenSymbol || null;
+  }
+
+  return null;
+}
 
 function isRetryableReadError(error: unknown): boolean {
   const candidate = error as RetryableDbError;
@@ -565,11 +736,14 @@ function mapTransactionRow(row: QueryResultRow): Record<string, unknown> {
       ? row.event_indexes.map((value: unknown) => Number(value))
       : [],
     transferCount: Number(row.transfer_count ?? 1),
+    eventKind: row.event_kind === null ? "transfer" : String(row.event_kind),
     tokenSymbol: String(row.token_symbol),
     blockHeight: Number(row.block_height),
     timestamp: row.timestamp,
     fromAddress: String(row.from_address),
     toAddress: String(row.to_address),
+    relatedAddress:
+      row.related_address === null ? null : String(row.related_address),
     amount: row.amount === null ? null : String(row.amount),
     amountNormalized:
       row.amount_normalized === null ? null : String(row.amount_normalized),
@@ -583,17 +757,20 @@ function mapTransactionRow(row: QueryResultRow): Record<string, unknown> {
       ? row.event_indexes.map((value: unknown) => Number(value))
       : [],
     transfer_count: Number(row.transfer_count ?? 1),
+    event_kind: row.event_kind === null ? "transfer" : String(row.event_kind),
     token_symbol: String(row.token_symbol),
     block_height: Number(row.block_height),
     from_address: String(row.from_address),
     to_address: String(row.to_address),
+    related_address:
+      row.related_address === null ? null : String(row.related_address),
     amount_normalized:
       row.amount_normalized === null ? null : String(row.amount_normalized),
   };
 }
 
 export async function closeDatabasePool(): Promise<void> {
-  await databasePool.end();
+  await Promise.all([databasePool.end(), cacheQueryPool.end()]);
 }
 
 export async function testDatabaseConnection(): Promise<void> {
@@ -1248,6 +1425,32 @@ export async function getTrackedNodeAddressTokens(): Promise<
   }));
 }
 
+export async function getTrackedPositiveNodeBalances(
+  tokenSymbol: string,
+): Promise<Array<{ address: string; tokenSymbol: string; balance: string }>> {
+  const result = await databasePool.query<{
+    address: string;
+    token_symbol: string;
+    balance: string;
+  }>(
+    `SELECT address,
+            token_symbol,
+            balance::text AS balance
+       FROM nodes
+      WHERE token_symbol = $1
+        AND balance IS NOT NULL
+        AND balance > 0
+      ORDER BY address ASC`,
+    [tokenSymbol],
+  );
+
+  return result.rows.map((row) => ({
+    address: row.address,
+    tokenSymbol: row.token_symbol,
+    balance: String(row.balance),
+  }));
+}
+
 export async function updateTrackedNodeBalances(
   client: PoolClient,
   items: Array<{ address: string; tokenSymbol: string; balance: string }>,
@@ -1267,7 +1470,7 @@ export async function updateTrackedNodeBalances(
       const item = batch[j];
       const baseIndex = j * 3 + 1;
       valuesList.push(
-        `($${baseIndex}::text, $${baseIndex + 1}::text, $${baseIndex + 2}::text)`,
+        `($${baseIndex}::text, $${baseIndex + 1}::text, $${baseIndex + 2}::numeric)`,
       );
       values.push(item.address, item.tokenSymbol, item.balance);
     }
@@ -1286,6 +1489,54 @@ export async function updateTrackedNodeBalances(
   }
 
   return updatedCount;
+}
+
+export async function syncNodeBalancesNormalizedForToken(
+  tokenSymbol: string,
+): Promise<number> {
+  const usingMetadataResult = await databasePool.query<{ count: string }>(
+    `WITH updated AS (
+       UPDATE nodes n
+          SET balance_normalized = CASE
+            WHEN tm.decimals <= 0 THEN n.balance
+            ELSE n.balance / POWER(10::numeric, tm.decimals)
+          END
+         FROM token_metadata tm
+        WHERE tm.token_symbol = n.token_symbol
+          AND n.token_symbol = $1
+          AND n.balance IS NOT NULL
+          AND n.balance_normalized IS DISTINCT FROM CASE
+            WHEN tm.decimals <= 0 THEN n.balance
+            ELSE n.balance / POWER(10::numeric, tm.decimals)
+          END
+      RETURNING 1
+     )
+     SELECT COUNT(*)::text AS count FROM updated`,
+    [tokenSymbol],
+  );
+
+  const fallbackResult = await databasePool.query<{ count: string }>(
+    `WITH updated AS (
+       UPDATE nodes n
+          SET balance_normalized = n.balance
+        WHERE n.token_symbol = $1
+          AND n.balance IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+              FROM token_metadata tm
+             WHERE tm.token_symbol = n.token_symbol
+          )
+          AND n.balance_normalized IS DISTINCT FROM n.balance
+      RETURNING 1
+     )
+     SELECT COUNT(*)::text AS count FROM updated`,
+    [tokenSymbol],
+  );
+
+  return (
+    Number(usingMetadataResult.rows[0]?.count ?? 0) +
+    Number(fallbackResult.rows[0]?.count ?? 0)
+  );
 }
 
 export async function upsertTransfers(
@@ -1350,6 +1601,95 @@ export async function upsertTransfers(
              timestamp = EXCLUDED.timestamp,
              from_address = EXCLUDED.from_address,
              to_address = EXCLUDED.to_address,
+             amount = EXCLUDED.amount,
+             amount_normalized = EXCLUDED.amount_normalized,
+             metadata = EXCLUDED.metadata`,
+      values,
+    );
+  }
+}
+
+export async function upsertTokenLedgerEvents(
+  client: PoolClient,
+  events: Array<{
+    eventIndex: number;
+    txHash: string;
+    blockHeight: number;
+    timestamp: Date;
+    tokenSymbol: string;
+    address: string;
+    relatedAddress: string | null;
+    eventKind: "burn" | "mint";
+    amount: string;
+    metadata: Record<string, unknown>;
+  }>,
+  tokenMetadataBySymbol: Map<
+    string,
+    Pick<TokenMetadataUpsertInput, "decimals" | "flags">
+  >,
+): Promise<void> {
+  if (events.length === 0) {
+    return;
+  }
+
+  const BATCH_SIZE = 100;
+
+  for (let i = 0; i < events.length; i += BATCH_SIZE) {
+    const batch = events.slice(i, i + BATCH_SIZE);
+    const values: Array<unknown> = [];
+    const placeholders: string[] = [];
+
+    for (let j = 0; j < batch.length; j++) {
+      const event = batch[j];
+      const storedAmounts = resolveStoredTransferAmounts(
+        event.amount,
+        tokenMetadataBySymbol.get(event.tokenSymbol),
+      );
+      const counterparty = event.relatedAddress ?? event.address;
+      const baseIndex = j * 12 + 1;
+      placeholders.push(
+        `($${baseIndex}, $${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3}, $${baseIndex + 4}, $${baseIndex + 5}, $${baseIndex + 6}, $${baseIndex + 7}, $${baseIndex + 8}, $${baseIndex + 9}, $${baseIndex + 10}, $${baseIndex + 11})`,
+      );
+
+      values.push(
+        event.txHash,
+        event.eventIndex,
+        event.eventKind,
+        event.tokenSymbol,
+        event.blockHeight,
+        event.timestamp,
+        event.eventKind === "burn" ? event.address : counterparty,
+        event.eventKind === "burn" ? counterparty : event.address,
+        event.relatedAddress,
+        storedAmounts.amount,
+        storedAmounts.amountNormalized,
+        event.metadata,
+      );
+    }
+
+    await client.query(
+      `INSERT INTO transactions (
+         tx_hash,
+         event_index,
+         event_kind,
+         token_symbol,
+         block_height,
+         timestamp,
+         from_address,
+         to_address,
+         related_address,
+         amount,
+         amount_normalized,
+         metadata
+       ) VALUES ${placeholders.join(", ")}
+       ON CONFLICT (tx_hash, event_index) DO UPDATE
+         SET event_kind = EXCLUDED.event_kind,
+             token_symbol = EXCLUDED.token_symbol,
+             block_height = EXCLUDED.block_height,
+             timestamp = EXCLUDED.timestamp,
+             from_address = EXCLUDED.from_address,
+             to_address = EXCLUDED.to_address,
+             related_address = EXCLUDED.related_address,
              amount = EXCLUDED.amount,
              amount_normalized = EXCLUDED.amount_normalized,
              metadata = EXCLUDED.metadata`,
@@ -1429,7 +1769,13 @@ export async function syncTransactionAmountsNormalized(): Promise<{
 
 export async function upsertNodes(
   client: PoolClient,
-  transfers: ParsedTransfer[],
+  transfers: Array<{
+    txHash: string;
+    blockHeight: number;
+    tokenSymbol: string;
+    fromAddress: string;
+    toAddress: string;
+  }>,
   balancesByNodeKey: Map<string, string>,
   tokenDecimalsBySymbol: Map<string, number>,
 ): Promise<void> {
@@ -1862,7 +2208,7 @@ export async function getTopHolders(
     `WITH node_balances AS (
        SELECT address,
               balance AS net_balance
-         FROM nodes
+         FROM public.nodes
         WHERE token_symbol = $1
           AND balance IS NOT NULL
           AND balance > 0
@@ -1874,14 +2220,14 @@ export async function getTopHolders(
            SELECT to_address AS address,
                   COALESCE(SUM(amount), 0) AS received,
                   0::numeric               AS sent
-             FROM transactions
+             FROM public.transactions
             WHERE token_symbol = $1
             GROUP BY to_address
            UNION ALL
            SELECT from_address AS address,
                   0::numeric             AS received,
                   COALESCE(SUM(amount), 0) AS sent
-             FROM transactions
+             FROM public.transactions
             WHERE token_symbol = $1
             GROUP BY from_address
          ) t
@@ -1932,7 +2278,7 @@ async function getTopHolderGraphNodes(
               balance_normalized,
               label,
               metadata
-         FROM nodes
+         FROM public.nodes
         WHERE token_symbol = $1
           AND balance IS NOT NULL
           AND balance > 0
@@ -1944,14 +2290,14 @@ async function getTopHolderGraphNodes(
            SELECT to_address AS address,
                   COALESCE(SUM(amount), 0) AS received,
                   0::numeric AS sent
-             FROM transactions
+             FROM public.transactions
             WHERE token_symbol = $1
             GROUP BY to_address
            UNION ALL
            SELECT from_address AS address,
                   0::numeric AS received,
                   COALESCE(SUM(amount), 0) AS sent
-             FROM transactions
+             FROM public.transactions
             WHERE token_symbol = $1
             GROUP BY from_address
          ) t
@@ -1981,7 +2327,7 @@ async function getTopHolderGraphNodes(
             holders.metadata,
             tm.decimals
        FROM holders
-       LEFT JOIN token_metadata tm
+      LEFT JOIN public.token_metadata tm
          ON tm.token_symbol = $1
       ORDER BY holders.net_balance DESC
       LIMIT $2`,
@@ -2004,7 +2350,7 @@ async function getTopHolderGraphNodes(
 export async function getAvailableTokens(): Promise<string[]> {
   const result = await queryReadWithRetry<{ token_symbol: string }>(
     `SELECT DISTINCT token_symbol
-       FROM transactions
+      FROM public.transactions
       WHERE token_symbol <> $1
       ORDER BY token_symbol ASC`,
     [CHAIN_SYNC_TOKEN],
@@ -2023,8 +2369,9 @@ export async function getTokenMetadata(
             decimals,
             (
               SELECT COUNT(1)
-                FROM nodes
+                FROM public.nodes
                WHERE token_symbol = tm.token_symbol
+                 AND COALESCE(balance, 0) > 0
             )::bigint AS holder_count,
             current_supply_raw,
             current_supply_normalized,
@@ -2033,7 +2380,7 @@ export async function getTokenMetadata(
             flags,
             metadata,
             updated_at
-       FROM token_metadata tm
+      FROM public.token_metadata tm
       WHERE token_symbol = $1`,
     [tokenSymbol],
     "get_token_metadata",
@@ -2061,7 +2408,7 @@ export async function getFullTokenGraph(
     edgeLimit > 0
       ? {
           text: `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
-                   FROM edges
+                   FROM public.edges
                   WHERE token_symbol = $1
                   ORDER BY id ASC
                   LIMIT $2`,
@@ -2069,7 +2416,7 @@ export async function getFullTokenGraph(
         }
       : {
           text: `SELECT id, token_symbol, from_address, to_address, amount, amount_normalized, tx_hash, event_index
-                   FROM edges
+                   FROM public.edges
                   WHERE token_symbol = $1
                   ORDER BY id ASC`,
           values: [tokenSymbol],
@@ -2091,7 +2438,7 @@ export async function getFullTokenGraph(
   const nodesResult = addressSet.size
     ? await queryReadWithRetry(
         `SELECT address, token_symbol, balance, balance_normalized, label, metadata
-           FROM nodes
+           FROM public.nodes
           WHERE token_symbol = $1
             AND address = ANY($2::text[])
           ORDER BY address ASC`,
@@ -2169,6 +2516,137 @@ export function clearSubgraphCache(): void {
   subgraphCache.clear();
 }
 
+export async function getCachedApiResponse(
+  cacheKey: string,
+): Promise<CacheLookupResult> {
+  try {
+    const result = await cacheQueryPool.query<{
+      payload: string;
+      expires_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT payload::text AS payload,
+              expires_at,
+              updated_at
+         FROM public.api_query_cache
+        WHERE cache_key = $1
+        LIMIT 1`,
+      [cacheKey],
+    );
+
+    if (result.rowCount === 0) {
+      return {
+        status: "miss",
+        payload: null,
+      };
+    }
+
+    const cacheRow = result.rows[0];
+    const expiresAt = new Date(cacheRow.expires_at).getTime();
+
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+      return {
+        status: "stale",
+        payload: null,
+      };
+    }
+
+    const tokenSymbol = parseTokenSymbolFromCacheKey(cacheKey);
+    if (tokenSymbol) {
+      const tokenSyncStateResult = await queryReadWithRetry<{
+        updated_at: Date;
+      }>(
+        `SELECT updated_at
+           FROM public.sync_state
+          WHERE token_symbol = $1
+          LIMIT 1`,
+        [tokenSymbol],
+        "cache_freshness_token_sync_state",
+      );
+
+      if (tokenSyncStateResult.rows.length > 0) {
+        const mainUpdatedAt = new Date(
+          tokenSyncStateResult.rows[0].updated_at,
+        ).getTime();
+        const cacheUpdatedAt = new Date(cacheRow.updated_at).getTime();
+
+        if (
+          Number.isFinite(mainUpdatedAt) &&
+          Number.isFinite(cacheUpdatedAt) &&
+          cacheUpdatedAt < mainUpdatedAt
+        ) {
+          return {
+            status: "stale",
+            payload: null,
+          };
+        }
+      }
+    }
+
+    return {
+      status: "hit",
+      payload: cacheRow.payload,
+    };
+  } catch (error) {
+    if (isUndefinedTableError(error)) {
+      logQueryCacheTableMissingOnce();
+      return {
+        status: "miss",
+        payload: null,
+      };
+    }
+
+    throw error;
+  }
+}
+
+export async function setCachedApiResponse(
+  cacheKey: string,
+  payloadJson: string,
+  ttlMs: number,
+): Promise<void> {
+  if (ttlMs <= 0) {
+    return;
+  }
+
+  try {
+    await cacheQueryPool.query(
+      `INSERT INTO public.api_query_cache (cache_key, payload, expires_at)
+       VALUES (
+         $1,
+         $2::jsonb,
+         NOW() + (($3::bigint) * INTERVAL '1 millisecond')
+       )
+       ON CONFLICT (cache_key)
+       DO UPDATE SET
+         payload = EXCLUDED.payload,
+         expires_at = EXCLUDED.expires_at,
+         updated_at = NOW()`,
+      [cacheKey, payloadJson, ttlMs],
+    );
+  } catch (error) {
+    if (isUndefinedTableError(error)) {
+      logQueryCacheTableMissingOnce();
+      return;
+    }
+
+    throw error;
+  }
+}
+
+export async function clearApiQueryCache(): Promise<void> {
+  try {
+    await cacheQueryPool.query("DELETE FROM public.api_query_cache");
+  } catch (error) {
+    if (isUndefinedTableError(error)) {
+      logQueryCacheTableMissingOnce();
+      return;
+    }
+
+    throw error;
+  }
+}
+
 export async function getAddressSubgraph(
   tokenSymbol: string,
   rootAddress: string,
@@ -2198,7 +2676,7 @@ export async function getAddressSubgraph(
               END AS address,
               walk.depth + 1 AS depth
          FROM walk
-         JOIN edges e
+         JOIN public.edges e
            ON e.token_symbol = $1
           AND (e.from_address = walk.address OR e.to_address = walk.address)
         WHERE walk.depth < $3
@@ -2219,7 +2697,7 @@ export async function getAddressSubgraph(
               e.tx_hash,
               e.event_index,
               LEAST(from_depth.depth, to_depth.depth) AS edge_depth
-         FROM edges e
+         FROM public.edges e
          JOIN address_depths from_depth
            ON from_depth.address = e.from_address
          JOIN address_depths to_depth
@@ -2259,7 +2737,7 @@ export async function getAddressSubgraph(
 
   const nodesResult = await queryReadWithRetry(
     `SELECT address, token_symbol, balance, balance_normalized, label, metadata
-       FROM nodes
+      FROM public.nodes
       WHERE token_symbol = $1
         AND address = ANY($2::text[])
       ORDER BY address ASC`,
@@ -2476,11 +2954,13 @@ export async function getTransactionsPage(options: {
     event_index: number;
     event_indexes: number[];
     transfer_count: number;
+    event_kind: string | null;
     token_symbol: string;
     block_height: string;
     timestamp: string;
     from_address: string;
     to_address: string;
+    related_address: string | null;
     amount: string;
     amount_normalized: string;
     metadata: unknown;
@@ -2491,11 +2971,13 @@ export async function getTransactionsPage(options: {
             NULL::integer AS event_index,
             ARRAY_AGG(event_index ORDER BY event_index) AS event_indexes,
             COUNT(*)::integer AS transfer_count,
+            MIN(event_kind) AS event_kind,
             token_symbol,
             block_height,
             timestamp,
             from_address,
             to_address,
+            MIN(related_address) AS related_address,
             SUM(amount) AS amount,
             SUM(amount_normalized) AS amount_normalized,
             CASE
@@ -2503,14 +2985,16 @@ export async function getTransactionsPage(options: {
               ELSE JSONB_AGG(metadata ORDER BY event_index)
             END AS metadata,
             COUNT(*) OVER () AS total
-       FROM transactions
+      FROM public.transactions
        ${whereClause}
       GROUP BY tx_hash,
+               event_kind,
                token_symbol,
                block_height,
                timestamp,
                from_address,
-               to_address
+               to_address,
+               related_address
       ORDER BY ${orderByClause}
       LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
@@ -2571,7 +3055,7 @@ export async function getAddressConnections(
        counterparty,
        total_volume,
        transaction_count
-     FROM address_connections
+    FROM public.address_connections
      WHERE token_symbol = $1
        AND address = $2
      ORDER BY total_volume DESC`,
@@ -2627,7 +3111,7 @@ export async function findAddressPaths(options: {
       total_volume: string | number;
     }>(
       `SELECT address, counterparty, total_volume
-         FROM address_connections
+         FROM public.address_connections
         WHERE token_symbol = $1
           AND address = ANY($2::text[])`,
       [options.tokenSymbol, frontierAddresses],
@@ -2669,7 +3153,7 @@ export async function findAddressPaths(options: {
       label: string | null;
     }>(
       `SELECT address, label_type, label
-         FROM nodes
+         FROM public.nodes
         WHERE token_symbol = $1
           AND address = ANY($2::text[])`,
       [options.tokenSymbol, [...visited]],

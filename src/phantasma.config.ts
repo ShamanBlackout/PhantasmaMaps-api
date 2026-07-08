@@ -114,3 +114,23 @@ export const databaseConfig = {
   database: process.env.PGDATABASE,
   ssl: readBoolean("PGSSL", false),
 } as const;
+
+export const connectionPoolConfig = {
+  connectionString: process.env.CONNECTION_POOL || process.env.DATABASE_URL,
+  host: process.env.PGHOST,
+  port: process.env.PGPORT ? readNumber("PGPORT", 5432) : undefined,
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
+  database: process.env.PGDATABASE,
+  ssl: readBoolean("PGSSL", false),
+} as const;
+
+export const cacheDatabaseConfig = {
+  connectionString: process.env.CACHE_DATABASE_URL,
+  host: process.env.CACHE_PGHOST,
+  port: process.env.CACHE_PGPORT ? readNumber("CACHE_PGPORT", 5432) : undefined,
+  user: process.env.CACHE_PGUSER,
+  password: process.env.CACHE_PGPASSWORD,
+  database: process.env.CACHE_PGDATABASE,
+  ssl: readBoolean("CACHE_PGSSL", readBoolean("PGSSL", false)),
+} as const;

@@ -12,6 +12,7 @@ function createDeps(): ApiServerDeps {
   return {
     rpcClient: {
       getBlockHeight: async () => 123,
+      getAccount: async () => ({ balances: [] }),
     },
     cacheMiddlewareImpl: () => noCache(),
     invalidateCacheImpl: () => {},
@@ -50,6 +51,7 @@ function createDeps(): ApiServerDeps {
       edges: [],
     }),
     getAddressConnectionsImpl: async () => [],
+    findAddressPathsImpl: async () => [],
     getTopHoldersImpl: async () => ({ items: [] }),
     getFullTokenGraphImpl: async () => ({
       totalSupply: 1000,

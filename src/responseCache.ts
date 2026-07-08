@@ -1,4 +1,9 @@
 import type { Response } from "express";
+import {
+  clearApiQueryCache,
+  getCachedApiResponse,
+  setCachedApiResponse,
+} from "./database";
 
 interface CacheEntry<T> {
   value: T;
@@ -62,12 +67,30 @@ export function cacheMiddleware(
   cacheKey: string,
   ttlMs: number,
 ): (request: any, response: Response, next: () => void) => void {
-  return (_request, response, next) => {
-    const cached = responseCache.get(cacheKey);
+  return async (_request, response, next) => {
+    const inMemoryCached = responseCache.get(cacheKey);
 
-    if (cached) {
+    if (inMemoryCached) {
       response.setHeader("X-Cache", "HIT");
-      response.json(JSON.parse(cached));
+      response.json(JSON.parse(inMemoryCached));
+      return;
+    }
+
+    let databaseCached: string | null = null;
+    let databaseLookupStatus: "hit" | "miss" | "stale" = "miss";
+    try {
+      const lookup = await getCachedApiResponse(cacheKey);
+      databaseLookupStatus = lookup.status;
+      databaseCached = lookup.payload;
+    } catch {
+      databaseCached = null;
+      databaseLookupStatus = "miss";
+    }
+
+    if (databaseCached) {
+      responseCache.set(cacheKey, databaseCached, ttlMs);
+      response.setHeader("X-Cache", "HIT");
+      response.json(JSON.parse(databaseCached));
       return;
     }
 
@@ -75,7 +98,14 @@ export function cacheMiddleware(
     const originalJson = response.json.bind(response);
     response.json = function (data: any) {
       try {
-        responseCache.set(cacheKey, JSON.stringify(data), ttlMs);
+        // Cache only successful responses to avoid persisting transient errors.
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          const payloadJson = JSON.stringify(data);
+          responseCache.set(cacheKey, payloadJson, ttlMs);
+          void setCachedApiResponse(cacheKey, payloadJson, ttlMs).catch(() => {
+            // Ignore persistent cache errors; API response should still succeed.
+          });
+        }
       } catch {
         // Ignore cache errors, still send response
       }
@@ -83,7 +113,10 @@ export function cacheMiddleware(
       return originalJson(data);
     };
 
-    response.setHeader("X-Cache", "MISS");
+    response.setHeader(
+      "X-Cache",
+      databaseLookupStatus === "stale" ? "STALE" : "MISS",
+    );
     next();
   };
 }
@@ -94,4 +127,11 @@ export function cacheMiddleware(
  */
 export function invalidateCache(pattern?: RegExp): void {
   responseCache.clear(pattern);
+
+  // Pattern-based invalidation is in-memory only. Full invalidation also clears DB cache.
+  if (!pattern) {
+    void clearApiQueryCache().catch(() => {
+      // Ignore persistent cache clear errors; data freshness still improves via TTL.
+    });
+  }
 }
