@@ -2666,66 +2666,85 @@ export async function getAddressSubgraph(
   const cached = subgraphCacheGet(cacheKey);
   if (cached) return cached;
 
-  const edgesResult = await queryReadWithRetry(
-    `WITH RECURSIVE walk AS (
-       SELECT $2::text AS address, 0 AS depth
-       UNION ALL
-       SELECT CASE
-                WHEN e.from_address = walk.address THEN e.to_address
-                ELSE e.from_address
-              END AS address,
-              walk.depth + 1 AS depth
-         FROM walk
-         JOIN public.edges e
-           ON e.token_symbol = $1
-          AND (e.from_address = walk.address OR e.to_address = walk.address)
-        WHERE walk.depth < $3
-     ),
-     address_depths AS (
-       SELECT address, MIN(depth) AS depth
-         FROM walk
-        GROUP BY address
-     ),
-     ranked_edges AS (
-       SELECT DISTINCT ON (e.tx_hash, e.event_index)
-              e.id,
-              e.token_symbol,
-              e.from_address,
-              e.to_address,
-              e.amount,
-              e.amount_normalized,
-              e.tx_hash,
-              e.event_index,
-              LEAST(from_depth.depth, to_depth.depth) AS edge_depth
-         FROM public.edges e
-         JOIN address_depths from_depth
-           ON from_depth.address = e.from_address
-         JOIN address_depths to_depth
-           ON to_depth.address = e.to_address
-        WHERE e.token_symbol = $1
-        ORDER BY e.tx_hash,
-                 e.event_index,
-                 LEAST(from_depth.depth, to_depth.depth),
-                 e.id
-     ),
-     limited_edges AS (
-       SELECT id,
-              token_symbol,
-              from_address,
-              to_address,
-              amount,
-              amount_normalized,
-              tx_hash,
-              event_index
-         FROM ranked_edges
-        ORDER BY edge_depth ASC, id ASC
-        LIMIT $4
-     )
-     SELECT * FROM limited_edges
-     ORDER BY id ASC`,
-    [tokenSymbol, rootAddress, depth, edgeLimit],
-    "get_address_subgraph_edges",
-  );
+  const edgesResult =
+    depth === 1
+      ? await queryReadWithRetry(
+          `SELECT id,
+                  token_symbol,
+                  from_address,
+                  to_address,
+                  amount,
+                  amount_normalized,
+                  tx_hash,
+                  event_index
+             FROM public.edges
+            WHERE token_symbol = $1
+              AND (from_address = $2 OR to_address = $2)
+            ORDER BY amount_normalized DESC, id ASC
+            LIMIT $3`,
+          [tokenSymbol, rootAddress, edgeLimit],
+          "get_address_subgraph_edges_depth1",
+        )
+      : await queryReadWithRetry(
+          `WITH RECURSIVE walk AS (
+             SELECT $2::text AS address, 0 AS depth
+             UNION ALL
+             SELECT CASE
+                      WHEN e.from_address = walk.address THEN e.to_address
+                      ELSE e.from_address
+                    END AS address,
+                    walk.depth + 1 AS depth
+               FROM walk
+               JOIN public.edges e
+                 ON e.token_symbol = $1
+                AND (e.from_address = walk.address OR e.to_address = walk.address)
+              WHERE walk.depth < $3
+           ),
+           address_depths AS (
+             SELECT address, MIN(depth) AS depth
+               FROM walk
+              GROUP BY address
+           ),
+           ranked_edges AS (
+             SELECT DISTINCT ON (e.tx_hash, e.event_index)
+                    e.id,
+                    e.token_symbol,
+                    e.from_address,
+                    e.to_address,
+                    e.amount,
+                    e.amount_normalized,
+                    e.tx_hash,
+                    e.event_index,
+                    LEAST(from_depth.depth, to_depth.depth) AS edge_depth
+               FROM public.edges e
+               JOIN address_depths from_depth
+                 ON from_depth.address = e.from_address
+               JOIN address_depths to_depth
+                 ON to_depth.address = e.to_address
+              WHERE e.token_symbol = $1
+              ORDER BY e.tx_hash,
+                       e.event_index,
+                       LEAST(from_depth.depth, to_depth.depth),
+                       e.id
+           ),
+           limited_edges AS (
+             SELECT id,
+                    token_symbol,
+                    from_address,
+                    to_address,
+                    amount,
+                    amount_normalized,
+                    tx_hash,
+                    event_index
+               FROM ranked_edges
+              ORDER BY edge_depth ASC, id ASC
+              LIMIT $4
+           )
+           SELECT * FROM limited_edges
+           ORDER BY id ASC`,
+          [tokenSymbol, rootAddress, depth, edgeLimit],
+          "get_address_subgraph_edges",
+        );
 
   const edges = edgesResult.rows.map(mapGraphEdgeRow);
   const addressSet = new Set<string>([rootAddress]);
