@@ -51,6 +51,8 @@ function createDeps(): ApiServerDeps {
       edges: [],
     }),
     getAddressConnectionsImpl: async () => [],
+    getPrecomputedApiViewImpl: async () => null,
+    refreshTokenPrecomputedViewsImpl: async () => {},
     findAddressPathsImpl: async () => [],
     getTopHoldersImpl: async () => ({ items: [] }),
     getFullTokenGraphImpl: async () => ({
@@ -201,13 +203,13 @@ test("GET /graph/token/:tokenSymbol degrades to smaller graph when primary query
   assert.equal(response.body?.meta?.totalEdgeCount, 0);
 });
 
-test("POST /analytics/tokens/:tokenSymbol/refresh validates date format", async () => {
+test("POST /analytics/tokens/:tokenSymbol/refresh is disabled", async () => {
   const app = createApiApp(createDeps());
   const response = await request(app).post(
     "/analytics/tokens/SOUL/refresh?date=2026/01/01",
   );
 
-  assert.equal(response.status, 400);
+  assert.equal(response.status, 403);
   assert.equal(response.body?.error?.code, "INVALID_REQUEST");
 });
 
@@ -316,4 +318,67 @@ test("GET /labels/nodes validates confidence bounds", async () => {
 
   assert.equal(response.status, 400);
   assert.equal(response.body?.error?.code, "INVALID_REQUEST");
+});
+
+test("GET /graph/address/:address/staged returns staged payload", async () => {
+  const deps = createDeps();
+  deps.getAddressSubgraphImpl = async (
+    tokenSymbol: string,
+    address: string,
+    depth: number,
+  ) => ({
+    tokenSymbol,
+    rootAddress: address,
+    depth,
+    nodes: [],
+    edges: [],
+  });
+  deps.getAddressConnectionsImpl = async () => [
+    {
+      counterparty: "P2KexampleCounterparty",
+      totalVolume: 10,
+      transactionCount: 2,
+    },
+  ];
+
+  const app = createApiApp(deps);
+  const response = await request(app).get(
+    "/graph/address/P2KDFxeeHNXsofabZmQ4L7d9B7n2Cm4S62GQsMqscGCJcnZ/staged?token=SOUL&stage=connections",
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body?.data?.stage, "connections");
+  assert.equal(Array.isArray(response.body?.data?.connections), true);
+  assert.equal(response.body?.data?.nextStage, "full");
+});
+
+test("GET /precomputed/tokens/:tokenSymbol/overview hydrates and returns precomputed source", async () => {
+  const deps = createDeps();
+  let refreshCalled = false;
+  let cacheHit = false;
+
+  deps.refreshTokenPrecomputedViewsImpl = async () => {
+    refreshCalled = true;
+    cacheHit = true;
+  };
+
+  deps.getPrecomputedApiViewImpl = async () => {
+    if (!cacheHit) {
+      return null;
+    }
+
+    return {
+      tokenSymbol: "SOUL",
+      generatedAt: new Date().toISOString(),
+      metadata: { symbol: "SOUL" },
+    };
+  };
+
+  const app = createApiApp(deps);
+  const response = await request(app).get("/precomputed/tokens/SOUL/overview");
+
+  assert.equal(response.status, 200);
+  assert.equal(refreshCalled, true);
+  assert.equal(response.body?.data?.source, "precomputed");
+  assert.equal(response.body?.data?.tokenSymbol, "SOUL");
 });

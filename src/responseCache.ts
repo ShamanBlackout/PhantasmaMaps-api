@@ -1,4 +1,5 @@
 import type { Response } from "express";
+import { apiConfig } from "./phantasma.config";
 import {
   clearApiQueryCache,
   getCachedApiResponse,
@@ -87,9 +88,21 @@ export function cacheMiddleware(
       databaseLookupStatus = "miss";
     }
 
-    if (databaseCached) {
+    if (databaseLookupStatus === "hit" && databaseCached) {
       responseCache.set(cacheKey, databaseCached, ttlMs);
       response.setHeader("X-Cache", "HIT");
+      response.json(JSON.parse(databaseCached));
+      return;
+    }
+
+    if (
+      databaseLookupStatus === "stale" &&
+      databaseCached &&
+      apiConfig.cacheServeStale
+    ) {
+      const staleTtlMs = Math.max(1_000, Math.min(5_000, ttlMs));
+      responseCache.set(cacheKey, databaseCached, staleTtlMs);
+      response.setHeader("X-Cache", "STALE");
       response.json(JSON.parse(databaseCached));
       return;
     }
@@ -115,7 +128,7 @@ export function cacheMiddleware(
 
     response.setHeader(
       "X-Cache",
-      databaseLookupStatus === "stale" ? "STALE" : "MISS",
+      databaseLookupStatus === "stale" ? "STALE-MISS" : "MISS",
     );
     next();
   };

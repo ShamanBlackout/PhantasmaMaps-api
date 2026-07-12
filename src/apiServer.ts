@@ -20,10 +20,12 @@ import {
   getAddressSubgraph,
   getAvailableTokens,
   getBlockSyncClaimsView,
+  getPrecomputedApiView,
   getFullTokenGraph,
   getSyncStates,
   getTokenMetadata,
   getLabeledNodes,
+  refreshTokenPrecomputedViews,
   getTopHolders,
   getTransactionsPage,
   refreshTokenAnalyticsForDate,
@@ -101,6 +103,10 @@ export type ApiServerDeps = {
     tokenSymbol: string,
     address: string,
   ) => Promise<unknown[]>;
+  getPrecomputedApiViewImpl: (
+    viewKey: string,
+  ) => Promise<Record<string, unknown> | null>;
+  refreshTokenPrecomputedViewsImpl: (tokenSymbol: string) => Promise<void>;
   findAddressPathsImpl: (options: {
     tokenSymbol: string;
     fromAddress: string;
@@ -160,6 +166,8 @@ const defaultDeps: ApiServerDeps = {
   getTokenMetadataImpl: getTokenMetadata,
   getAddressSubgraphImpl: getAddressSubgraph,
   getAddressConnectionsImpl: getAddressConnections,
+  getPrecomputedApiViewImpl: getPrecomputedApiView,
+  refreshTokenPrecomputedViewsImpl: refreshTokenPrecomputedViews,
   findAddressPathsImpl: findAddressPaths,
   getTopHoldersImpl: getTopHolders,
   getFullTokenGraphImpl: getFullTokenGraph,
@@ -436,6 +444,7 @@ function sendSuccess(
   };
 
   const etag = createEtagFromData(body.data);
+  response.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
   response.setHeader("ETag", etag);
 
   if (request.headers["if-none-match"] === etag) {
@@ -444,6 +453,48 @@ function sendSuccess(
   }
 
   response.status(status).json(body);
+}
+
+type AddressGraphStage = "core" | "connections" | "full";
+
+function normalizeAddressGraphStage(request: Request): AddressGraphStage {
+  const raw = String(request.query.stage ?? "core")
+    .trim()
+    .toLowerCase();
+
+  if (raw === "core" || raw === "connections" || raw === "full") {
+    return raw;
+  }
+
+  throw new ApiError(
+    400,
+    "INVALID_REQUEST",
+    "stage must be core, connections, or full",
+    {
+      received: raw || null,
+    },
+  );
+}
+
+type TokenGraphStage = "base" | "holders" | "full";
+
+function normalizeTokenGraphStage(request: Request): TokenGraphStage {
+  const raw = String(request.query.stage ?? "base")
+    .trim()
+    .toLowerCase();
+
+  if (raw === "base" || raw === "holders" || raw === "full") {
+    return raw;
+  }
+
+  throw new ApiError(
+    400,
+    "INVALID_REQUEST",
+    "stage must be base, holders, or full",
+    {
+      received: raw || null,
+    },
+  );
 }
 
 function sendError(
@@ -543,6 +594,47 @@ function buildAddressConnectionsCacheKey(request: Request): string {
   const tokenSymbol = normalizeTokenQueryForCache(request);
   const address = normalizeAddressPathForCache(request);
   return `address-connections:${tokenSymbol}:${address}`;
+}
+
+function buildAddressStagedCacheKey(request: Request): string {
+  const tokenSymbol = normalizeTokenQueryForCache(request);
+  const address = normalizeAddressPathForCache(request);
+  const stage = String(request.query.stage ?? "core")
+    .trim()
+    .toLowerCase();
+  const depth = readPositiveInt(
+    String(request.query.depth ?? ""),
+    apiConfig.graphDefaultDepth,
+  );
+  const edgeLimit = readPositiveInt(
+    String(request.query.edgeLimit ?? ""),
+    apiConfig.graphMaxEdgesPerRequest,
+  );
+  const connectionsLimit = readPositiveInt(
+    String(request.query.connectionsLimit ?? ""),
+    25,
+  );
+
+  return `address-staged:${tokenSymbol}:${address}:${stage}:${depth}:${edgeLimit}:${connectionsLimit}`;
+}
+
+function buildTokenStagedCacheKey(request: Request): string {
+  const tokenSymbol = String(request.params.tokenSymbol ?? "")
+    .trim()
+    .toUpperCase();
+  const stage = String(request.query.stage ?? "base")
+    .trim()
+    .toLowerCase();
+  const edgeLimit = readPositiveInt(
+    String(request.query.edgeLimit ?? ""),
+    apiConfig.tokenGraphStageBaseEdgeLimit,
+  );
+  const topHoldersLimit = readPositiveInt(
+    String(request.query.topHoldersLimit ?? ""),
+    10,
+  );
+
+  return `token-staged:${tokenSymbol}:${stage}:${edgeLimit}:${topHoldersLimit}`;
 }
 
 function buildTracePathsCacheKey(request: Request): string {
@@ -688,6 +780,7 @@ async function sendTokenGraphResponse(
 
 export function createApiApp(deps: ApiServerDeps = defaultDeps) {
   const app = express();
+  app.disable("x-powered-by");
 
   const allowedOrigins = String(process.env.PHANTASMA_API_CORS_ORIGINS ?? "")
     .split(",")
@@ -704,6 +797,8 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
     compression({
       // Only compress responses larger than 1KB; small payloads have negligible gain
       threshold: 1024,
+      level: 6,
+      memLevel: 8,
     }),
   );
 
@@ -845,6 +940,146 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
         }
 
         sendSuccess(request, response, metadata);
+      } catch (error: unknown) {
+        handleRouteError(response, error);
+      }
+    },
+  );
+
+  app.get(
+    "/graph/address/:address/staged",
+    (request: Request, response: Response, next) => {
+      const cacheKey = buildAddressStagedCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1000)(
+        request,
+        response,
+        next,
+      );
+    },
+    async (request: Request, response: Response) => {
+      try {
+        const tokenSymbol = String(request.query.token ?? "").trim();
+        const address = String(request.params.address).trim();
+        const stage = normalizeAddressGraphStage(request);
+
+        if (!tokenSymbol) {
+          throw new ApiError(
+            400,
+            "INVALID_REQUEST",
+            "token query parameter is required",
+            {
+              query: "token",
+            },
+          );
+        }
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "token query parameter is invalid",
+            {
+              tokenSymbol,
+            },
+          );
+        }
+        if (!isValidAddress(address)) {
+          throw new ApiError(
+            400,
+            "ADDRESS_INVALID",
+            "address path parameter is invalid",
+            {
+              address,
+            },
+          );
+        }
+
+        const requestedDepth = readPositiveInt(
+          String(request.query.depth ?? ""),
+          apiConfig.graphDefaultDepth,
+        );
+        if (requestedDepth > apiConfig.graphHardMaxDepth) {
+          throw new ApiError(
+            400,
+            "GRAPH_DEPTH_LIMIT_EXCEEDED",
+            `depth must be <= ${apiConfig.graphHardMaxDepth}`,
+            { received: requestedDepth, max: apiConfig.graphHardMaxDepth },
+          );
+        }
+
+        const requestedEdgeLimit = readPositiveInt(
+          String(request.query.edgeLimit ?? ""),
+          apiConfig.graphMaxEdgesPerRequest,
+        );
+        if (requestedEdgeLimit > apiConfig.graphMaxEdgesPerRequest) {
+          throw new ApiError(
+            400,
+            "GRAPH_EDGE_LIMIT_EXCEEDED",
+            `edgeLimit must be <= ${apiConfig.graphMaxEdgesPerRequest}`,
+            {
+              received: requestedEdgeLimit,
+              max: apiConfig.graphMaxEdgesPerRequest,
+            },
+          );
+        }
+
+        const coreEdgeLimit = Math.min(
+          requestedEdgeLimit,
+          apiConfig.graphStageCoreEdgeLimit,
+        );
+        const coreGraph = await deps.getAddressSubgraphImpl(
+          tokenSymbol,
+          address,
+          1,
+          coreEdgeLimit,
+        );
+
+        if (stage === "core") {
+          sendSuccess(request, response, {
+            tokenSymbol,
+            address,
+            stage,
+            core: coreGraph,
+            nextStage: "connections",
+          });
+          return;
+        }
+
+        const connectionsLimit = clampInt(
+          readPositiveInt(String(request.query.connectionsLimit ?? ""), 25),
+          1,
+          200,
+        );
+        const connections = (
+          await deps.getAddressConnectionsImpl(tokenSymbol, address)
+        ).slice(0, connectionsLimit);
+
+        if (stage === "connections") {
+          sendSuccess(request, response, {
+            tokenSymbol,
+            address,
+            stage,
+            core: coreGraph,
+            connections,
+            nextStage: "full",
+          });
+          return;
+        }
+
+        const fullGraph = await deps.getAddressSubgraphImpl(
+          tokenSymbol,
+          address,
+          requestedDepth,
+          requestedEdgeLimit,
+        );
+
+        sendSuccess(request, response, {
+          tokenSymbol,
+          address,
+          stage,
+          core: coreGraph,
+          connections,
+          full: fullGraph,
+        });
       } catch (error: unknown) {
         handleRouteError(response, error);
       }
@@ -1122,6 +1357,95 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           Math.min(limit, 100),
         );
         sendSuccess(request, response, result);
+      } catch (error: unknown) {
+        handleRouteError(response, error);
+      }
+    },
+  );
+
+  app.get(
+    "/graph/token/:tokenSymbol/staged",
+    (request: Request, response: Response, next) => {
+      const cacheKey = buildTokenStagedCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1000)(
+        request,
+        response,
+        next,
+      );
+    },
+    async (request: Request, response: Response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol },
+          );
+        }
+
+        const stage = normalizeTokenGraphStage(request);
+        const baseEdgeLimit = clampInt(
+          readPositiveInt(
+            String(request.query.edgeLimit ?? ""),
+            apiConfig.tokenGraphStageBaseEdgeLimit,
+          ),
+          1,
+          apiConfig.tokenGraphMaxEdges,
+        );
+
+        if (stage === "base") {
+          const graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
+            includeTopHoldersLimit: 0,
+            edgeLimit: baseEdgeLimit,
+          });
+
+          sendSuccess(request, response, {
+            tokenSymbol,
+            stage,
+            graph,
+            nextStage: "holders",
+          });
+          return;
+        }
+
+        const topHoldersLimit = clampInt(
+          readPositiveInt(String(request.query.topHoldersLimit ?? ""), 10),
+          1,
+          100,
+        );
+
+        if (stage === "holders") {
+          const [graph, topHolders] = await Promise.all([
+            deps.getFullTokenGraphImpl(tokenSymbol, {
+              includeTopHoldersLimit: 0,
+              edgeLimit: baseEdgeLimit,
+            }),
+            deps.getTopHoldersImpl(tokenSymbol, topHoldersLimit),
+          ]);
+
+          sendSuccess(request, response, {
+            tokenSymbol,
+            stage,
+            graph,
+            topHolders,
+            nextStage: "full",
+          });
+          return;
+        }
+
+        const includeTopHolders = normalizeWithTopHolders(request);
+        const graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
+          includeTopHoldersLimit: includeTopHolders,
+          edgeLimit: apiConfig.tokenGraphMaxEdges,
+        });
+
+        sendSuccess(request, response, {
+          tokenSymbol,
+          stage,
+          graph,
+        });
       } catch (error: unknown) {
         handleRouteError(response, error);
       }
@@ -1543,6 +1867,38 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
   );
 
   app.get(
+    "/precomputed/tokens/:tokenSymbol/overview",
+    async (request: Request, response: Response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol },
+          );
+        }
+
+        const viewKey = `token-overview:${tokenSymbol}`;
+        let precomputed = await deps.getPrecomputedApiViewImpl(viewKey);
+        if (!precomputed) {
+          await deps.refreshTokenPrecomputedViewsImpl(tokenSymbol);
+          precomputed = await deps.getPrecomputedApiViewImpl(viewKey);
+        }
+
+        sendSuccess(request, response, {
+          tokenSymbol,
+          source: precomputed ? "precomputed" : "generated",
+          overview: precomputed,
+        });
+      } catch (error: unknown) {
+        handleRouteError(response, error);
+      }
+    },
+  );
+
+  app.get(
     "/analytics/tokens/:tokenSymbol/top-movers",
     async (request: Request, response: Response) => {
       try {
@@ -1611,6 +1967,9 @@ export function startApiServer(deps: ApiServerDeps = defaultDeps): {
   const server = app.listen(apiConfig.port, () => {
     console.log(`API server listening on port ${apiConfig.port}`);
   });
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+  server.requestTimeout = 75_000;
 
   const shutdown = async (): Promise<void> => {
     await deps.closeDatabasePoolImpl();

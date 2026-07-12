@@ -123,6 +123,39 @@ function sleep(delayMs: number): Promise<void> {
   });
 }
 
+function isWithinUtcHourWindow(
+  hourUtc: number,
+  startHourUtc: number,
+  endHourUtc: number,
+): boolean {
+  const start = ((Math.floor(startHourUtc) % 24) + 24) % 24;
+  const end = ((Math.floor(endHourUtc) % 24) + 24) % 24;
+
+  if (start === end) {
+    return true;
+  }
+
+  if (start < end) {
+    return hourUtc >= start && hourUtc < end;
+  }
+
+  return hourUtc >= start || hourUtc < end;
+}
+
+function resolveWorkerCount(totalBlocks: number): number {
+  const currentHourUtc = new Date().getUTCHours();
+  const usePeakProfile = isWithinUtcHourWindow(
+    currentHourUtc,
+    syncConfig.peakHoursStartUtc,
+    syncConfig.peakHoursEndUtc,
+  );
+  const configured = usePeakProfile
+    ? syncConfig.peakWorkerCount
+    : syncConfig.workerCount;
+
+  return Math.min(Math.max(1, configured), totalBlocks);
+}
+
 async function mapWithConcurrency<T, TResult>(
   items: T[],
   requestedConcurrency: number,
@@ -571,10 +604,7 @@ async function runBlockRange(
   }
 
   const totalBlocks = endHeight - startHeight + 1;
-  const workerCount = Math.min(
-    Math.max(1, syncConfig.workerCount),
-    totalBlocks,
-  );
+  const workerCount = resolveWorkerCount(totalBlocks);
 
   await seedBlockSyncClaims(startHeight, endHeight);
   const resetAtStart = await resetStaleBlockSyncClaims(
@@ -756,6 +786,10 @@ async function runBlockRange(
               console.log(
                 `Processed block ${result.blockHeight} with ${result.transferCount} transfer(s) across ${result.tokenSymbols.length} token(s); committedThrough=${effectiveCommitHeight}; active=[${activeSummary}]`,
               );
+            }
+
+            if (syncConfig.interBlockDelayMs > 0) {
+              await sleep(syncConfig.interBlockDelayMs);
             }
 
             return effectiveCommitHeight;

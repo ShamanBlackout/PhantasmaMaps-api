@@ -73,6 +73,10 @@ export const syncConfig = {
   initialBackfillStartBlock: 6525260,
   blockLogInterval: readNumber("PHANTASMA_SYNC_BLOCK_LOG_INTERVAL", 100),
   workerCount: readNumber("PHANTASMA_SYNC_WORKER_COUNT", 4),
+  peakWorkerCount: readNumber("PHANTASMA_SYNC_PEAK_WORKER_COUNT", 2),
+  peakHoursStartUtc: readNumber("PHANTASMA_SYNC_PEAK_HOURS_START_UTC", 12),
+  peakHoursEndUtc: readNumber("PHANTASMA_SYNC_PEAK_HOURS_END_UTC", 22),
+  interBlockDelayMs: readNumber("PHANTASMA_SYNC_INTER_BLOCK_DELAY_MS", 0),
   claimMaxAttempts: readNumber("PHANTASMA_SYNC_CLAIM_MAX_ATTEMPTS", 3),
   claimRetryBaseDelaySeconds: readNumber(
     "PHANTASMA_SYNC_CLAIM_RETRY_BASE_DELAY_SECONDS",
@@ -93,6 +97,14 @@ export const apiConfig = {
   port: readNumber("PHANTASMA_API_PORT", 3000),
   graphDefaultDepth: 1,
   graphHardMaxDepth: 2,
+  graphStageCoreEdgeLimit: readPositiveNumber(
+    "PHANTASMA_GRAPH_STAGE_CORE_EDGE_LIMIT",
+    300,
+  ),
+  tokenGraphStageBaseEdgeLimit: readPositiveNumber(
+    "PHANTASMA_TOKEN_GRAPH_STAGE_BASE_EDGE_LIMIT",
+    600,
+  ),
   graphMaxEdgesPerRequest: readNumber(
     "PHANTASMA_GRAPH_MAX_EDGES_PER_REQUEST",
     1200,
@@ -100,6 +112,15 @@ export const apiConfig = {
   tokenGraphMaxEdges: readPositiveNumber(
     "PHANTASMA_TOKEN_GRAPH_MAX_EDGES",
     1200,
+  ),
+  cacheServeStale: readBoolean("PHANTASMA_API_CACHE_SERVE_STALE", true),
+  cacheStaleMaxMs: readPositiveNumber(
+    "PHANTASMA_API_CACHE_STALE_MAX_MS",
+    300000,
+  ),
+  precomputeTtlMs: readPositiveNumber(
+    "PHANTASMA_API_PRECOMPUTE_TTL_MS",
+    180000,
   ),
   transactionPageSizeDefault: readNumber("PHANTASMA_TX_PAGE_SIZE", 50),
   transactionPageSizeMax: readNumber("PHANTASMA_TX_PAGE_SIZE_MAX", 250),
