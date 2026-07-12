@@ -3631,7 +3631,15 @@ export async function refreshTokenAnalyticsForDate(
        FROM balance_ledger bl
        LEFT JOIN token_metadata tm
          ON tm.token_symbol = $1
-       WHERE COALESCE(bl.balance_normalized, 0::numeric) > 0::numeric`,
+       WHERE COALESCE(bl.balance_normalized, 0::numeric) > 0::numeric
+       ON CONFLICT (token_symbol, address, bucket_date) DO UPDATE
+         SET balance = EXCLUDED.balance,
+             balance_normalized = EXCLUDED.balance_normalized,
+             share_of_supply = EXCLUDED.share_of_supply,
+             wallet_type = EXCLUDED.wallet_type,
+             first_seen_at = EXCLUDED.first_seen_at,
+             last_seen_at = EXCLUDED.last_seen_at,
+             updated_at = NOW()`,
       [tokenSymbol, normalizedBucketDate],
     );
 
@@ -3706,7 +3714,16 @@ export async function refreshTokenAnalyticsForDate(
          NOW(),
          NOW()
        FROM expanded
-       GROUP BY token_symbol, address`,
+       GROUP BY token_symbol, address
+       ON CONFLICT (token_symbol, address, bucket_date) DO UPDATE
+         SET incoming_tx_count = EXCLUDED.incoming_tx_count,
+             outgoing_tx_count = EXCLUDED.outgoing_tx_count,
+             incoming_volume = EXCLUDED.incoming_volume,
+             outgoing_volume = EXCLUDED.outgoing_volume,
+             net_flow = EXCLUDED.net_flow,
+             counterparty_count = EXCLUDED.counterparty_count,
+             last_tx_at = EXCLUDED.last_tx_at,
+             updated_at = NOW()`,
       [tokenSymbol, normalizedBucketDate],
     );
 
