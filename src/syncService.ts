@@ -542,7 +542,16 @@ export async function processBlockHeight(
   }
 
   for (const touched of touchedTokenDates) {
-    await refreshTokenAnalyticsForDate(touched.tokenSymbol, touched.bucketDate);
+    try {
+      await refreshTokenAnalyticsForDate(
+        touched.tokenSymbol,
+        touched.bucketDate,
+      );
+    } catch (error) {
+      console.warn(
+        `Analytics refresh failed for ${touched.tokenSymbol} on ${touched.bucketDate.toISOString().slice(0, 10)} after block ${parsedBlock.blockHeight}; continuing block sync. error=${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   return {
