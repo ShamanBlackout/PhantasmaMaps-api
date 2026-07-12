@@ -499,6 +499,15 @@ export async function processBlockHeight(
       await upsertTokenMetadata(client, tokenMetadata);
     }
 
+    if (nodeSeeds.length > 0) {
+      await upsertNodes(
+        client,
+        nodeSeeds,
+        nodeBalances,
+        new Map(tokenMetadata.map((item) => [item.tokenSymbol, item.decimals])),
+      );
+    }
+
     if (parsedBlock.transfers.length > 0) {
       await upsertTransfers(
         client,
@@ -518,15 +527,6 @@ export async function processBlockHeight(
         client,
         parsedBlock.ledgerEvents,
         tokenMetadataBySymbol,
-      );
-    }
-
-    if (nodeSeeds.length > 0) {
-      await upsertNodes(
-        client,
-        nodeSeeds,
-        nodeBalances,
-        new Map(tokenMetadata.map((item) => [item.tokenSymbol, item.decimals])),
       );
     }
 
