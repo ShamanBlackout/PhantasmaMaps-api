@@ -17,6 +17,7 @@
     "label:review-sample": "node ./node_modules/tsx/dist/cli.mjs src/labelingReviewSample.ts",
     "sync": "npm run backfill",
     "sync:nodes-normalized": "node ./node_modules/tsx/dist/cli.mjs src/syncNodeBalancesNormalized.ts",
+    "verify:indexes": "node ./node_modules/tsx/dist/cli.mjs scripts/verifyIndexes.ts",
     "maintenance:zero-stale": "node ./node_modules/tsx/dist/cli.mjs src/zeroStaleTokenRows.ts",
     "find-first-transfer": "node ./node_modules/tsx/dist/cli.mjs src/findFirstTransferBlock.ts",
     "check": "tsc --noEmit",

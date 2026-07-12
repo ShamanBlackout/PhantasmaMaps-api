@@ -2544,10 +2544,25 @@ export async function getCachedApiResponse(
     const cacheRow = result.rows[0];
     const expiresAt = new Date(cacheRow.expires_at).getTime();
 
-    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    const now = Date.now();
+    const staleAgeMs = Number.isFinite(expiresAt) ? now - expiresAt : Infinity;
+    const canServeStale =
+      apiConfig.cacheServeStale &&
+      Number.isFinite(staleAgeMs) &&
+      staleAgeMs >= 0 &&
+      staleAgeMs <= apiConfig.cacheStaleMaxMs;
+
+    if (!Number.isFinite(expiresAt)) {
       return {
         status: "stale",
         payload: null,
+      };
+    }
+
+    if (now > expiresAt) {
+      return {
+        status: "stale",
+        payload: canServeStale ? cacheRow.payload : null,
       };
     }
 
@@ -2577,7 +2592,7 @@ export async function getCachedApiResponse(
         ) {
           return {
             status: "stale",
-            payload: null,
+            payload: apiConfig.cacheServeStale ? cacheRow.payload : null,
           };
         }
       }
@@ -4004,4 +4019,118 @@ export async function getTokenTopMovers(
   );
 
   return result.rows.map(mapTokenTopMoverRow);
+}
+
+export async function getPrecomputedApiView(
+  viewKey: string,
+): Promise<Record<string, unknown> | null> {
+  const result = await queryReadWithRetry<{
+    payload: Record<string, unknown>;
+  }>(
+    `SELECT payload
+       FROM public.api_precomputed_views
+      WHERE view_key = $1
+        AND expires_at > NOW()
+      LIMIT 1`,
+    [viewKey],
+    "get_precomputed_api_view",
+  );
+
+  if (result.rowCount === 0) {
+    return null;
+  }
+
+  return (result.rows[0]?.payload as Record<string, unknown>) ?? null;
+}
+
+export async function setPrecomputedApiView(options: {
+  viewKey: string;
+  tokenSymbol?: string;
+  payload: Record<string, unknown>;
+  ttlMs?: number;
+}): Promise<void> {
+  const ttlMs = Math.max(
+    1000,
+    Math.floor(Number(options.ttlMs ?? apiConfig.precomputeTtlMs) || 0),
+  );
+
+  await databasePool.query(
+    `INSERT INTO public.api_precomputed_views (
+       view_key,
+       token_symbol,
+       payload,
+       expires_at,
+       updated_at
+     ) VALUES (
+       $1,
+       $2,
+       $3::jsonb,
+       NOW() + (($4::bigint) * INTERVAL '1 millisecond'),
+       NOW()
+     )
+     ON CONFLICT (view_key) DO UPDATE
+       SET token_symbol = EXCLUDED.token_symbol,
+           payload = EXCLUDED.payload,
+           expires_at = EXCLUDED.expires_at,
+           updated_at = NOW()`,
+    [
+      options.viewKey,
+      options.tokenSymbol ?? null,
+      JSON.stringify(options.payload),
+      ttlMs,
+    ],
+  );
+}
+
+export async function refreshTokenPrecomputedViews(
+  tokenSymbol: string,
+): Promise<void> {
+  const [metadata, graphBase, topHolders, timeseries30] = await Promise.all([
+    getTokenMetadata(tokenSymbol),
+    getFullTokenGraph(tokenSymbol, {
+      includeTopHoldersLimit: 0,
+      edgeLimit: Math.min(
+        apiConfig.tokenGraphMaxEdges,
+        apiConfig.tokenGraphStageBaseEdgeLimit,
+      ),
+    }),
+    getTopHolders(tokenSymbol, 25),
+    getTokenDailyMetrics(tokenSymbol, 30),
+  ]);
+
+  const generatedAt = new Date().toISOString();
+  const basePayload = {
+    tokenSymbol,
+    generatedAt,
+    metadata,
+    graphBase,
+    topHolders,
+    timeseries30,
+  } as Record<string, unknown>;
+
+  await Promise.all([
+    setPrecomputedApiView({
+      viewKey: `token-overview:${tokenSymbol}`,
+      tokenSymbol,
+      payload: basePayload,
+    }),
+    setPrecomputedApiView({
+      viewKey: `token-graph-base:${tokenSymbol}`,
+      tokenSymbol,
+      payload: {
+        tokenSymbol,
+        generatedAt,
+        graph: graphBase,
+      },
+    }),
+    setPrecomputedApiView({
+      viewKey: `token-top-holders:${tokenSymbol}:25`,
+      tokenSymbol,
+      payload: {
+        tokenSymbol,
+        generatedAt,
+        topHolders,
+      },
+    }),
+  ]);
 }

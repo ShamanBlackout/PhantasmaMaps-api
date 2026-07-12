@@ -132,6 +132,9 @@ sql/migrations/010_address_connections.sql
 sql/migrations/011_analytics_daily.sql
 sql/migrations/012_labeling_support.sql
 sql/migrations/013_query_cache.sql
+sql/migrations/014_transaction_event_kind.sql
+sql/migrations/015_graph_query_indexes.sql
+sql/migrations/016_api_precomputed_views.sql
 ```
 
 If you use a dedicated cache database (`CACHE_DATABASE_URL`), apply
@@ -163,6 +166,9 @@ psql $env:DATABASE_URL -f .\sql/migrations/010_address_connections.sql
 psql $env:DATABASE_URL -f .\sql/migrations/011_analytics_daily.sql
 psql $env:DATABASE_URL -f .\sql/migrations/012_labeling_support.sql
 psql $env:DATABASE_URL -f .\sql/migrations/013_query_cache.sql
+psql $env:DATABASE_URL -f .\sql/migrations/014_transaction_event_kind.sql
+psql $env:DATABASE_URL -f .\sql/migrations/015_graph_query_indexes.sql
+psql $env:DATABASE_URL -f .\sql/migrations/016_api_precomputed_views.sql
 ```
 
 Bash example:
@@ -182,7 +188,10 @@ for file in \
   sql/migrations/010_address_connections.sql \
   sql/migrations/011_analytics_daily.sql \
   sql/migrations/012_labeling_support.sql \
-  sql/migrations/013_query_cache.sql; do
+  sql/migrations/013_query_cache.sql \
+  sql/migrations/014_transaction_event_kind.sql \
+  sql/migrations/015_graph_query_indexes.sql \
+  sql/migrations/016_api_precomputed_views.sql; do
   psql "$DATABASE_URL" -f "$file"
 done
 ```
@@ -302,6 +311,18 @@ main DB, updates `api_query_cache`, and serves the fresh response.
 `PHANTASMA_SYNC_WORKER_COUNT`
 : Worker count for block processing. Default: `4`.
 
+`PHANTASMA_SYNC_PEAK_WORKER_COUNT`
+: Worker count used during peak hours. Default: `2`.
+
+`PHANTASMA_SYNC_PEAK_HOURS_START_UTC`
+: Inclusive UTC hour to begin peak profile. Default: `12`.
+
+`PHANTASMA_SYNC_PEAK_HOURS_END_UTC`
+: Exclusive UTC hour to end peak profile. Default: `22`.
+
+`PHANTASMA_SYNC_INTER_BLOCK_DELAY_MS`
+: Optional delay between committed blocks per worker to reduce DB pressure. Default: `0`.
+
 `PHANTASMA_SYNC_BLOCK_LOG_INTERVAL`
 : Log every N processed blocks. Default: `100`.
 
@@ -333,6 +354,21 @@ main DB, updates `api_query_cache`, and serves the fresh response.
 
 `PHANTASMA_TX_PAGE_SIZE_MAX`
 : Maximum transaction page size. Default: `250`.
+
+`PHANTASMA_GRAPH_STAGE_CORE_EDGE_LIMIT`
+: Edge cap for staged address graph core fetches. Default: `300`.
+
+`PHANTASMA_TOKEN_GRAPH_STAGE_BASE_EDGE_LIMIT`
+: Edge cap for staged token graph base fetches. Default: `600`.
+
+`PHANTASMA_API_CACHE_SERVE_STALE`
+: Serve stale persistent-cache payloads while refreshing in the background window. Default: `true`.
+
+`PHANTASMA_API_CACHE_STALE_MAX_MS`
+: Maximum age for serving stale persistent-cache rows. Default: `300000`.
+
+`PHANTASMA_API_PRECOMPUTE_TTL_MS`
+: TTL for persisted precomputed API view payloads. Default: `180000`.
 
 ### Maintenance
 
