@@ -390,7 +390,14 @@ main DB, updates `api_query_cache`, and serves the fresh response.
 : Parses five blocks starting from the configured backfill block and writes a JSON report without touching the database.
 
 `npm run label:dry-run`
-: Scores per-token wallet activity for candidate labels (high inbound/outbound, hub receiver, distributor, router-like) across all historical data by default, and writes `labeling-dry-run.json` without modifying database labels.
+: Scores per-token wallet activity for candidate labels (Hub, Distributor, Hub Receiver, High Inbound Activity, High Outbound Activity) across all historical data by default, and writes `labeling-dry-run.json` without modifying database labels.
+
+The rubric (`src/labelingRubric.ts`, version `label-rubric-v2`) stores readable names in `label` (shown as the wallet name in the map) and stable codes in `label_type` (`hub`, `distributor`, `receiver`, `inbound_activity`, `outbound_activity`). To avoid statistical noise it:
+
+- skips tokens with fewer than 10 scored wallets (`--label-min-population=N`);
+- requires at least 3 transactions in the flagged direction (`--label-min-tx=N`) and at least 2 counterparties for spread-based labels (`--label-min-counterparties=N`);
+- only treats a wallet as above the p95/p99 threshold when it is also above the token median, so airdrop-shaped tokens are not flagged wholesale;
+- lowers confidence for tokens with fewer than 100 scored wallets.
 
 When no `--label-token` is provided, the scorer runs token-by-token batching automatically to avoid query timeouts on large all-time datasets.
 
@@ -407,7 +414,7 @@ When no `--label-token` is provided, the scorer runs token-by-token batching aut
 : Increases the per-query timeout for heavy all-time scoring batches.
 
 `node ./node_modules/tsx/dist/cli.mjs src/labelingDryRun.ts --label-days=30 --label-token=SOUL --label-apply --label-min-confidence=0.8 --label-max-updates=200`
-: Applies candidate labels to `nodes` and writes audit rows to `node_label_history`. Manual labels are protected by default; add `--label-overwrite-manual` only when intentionally replacing manually curated labels.
+: Applies candidate labels to `nodes` and writes audit rows to `node_label_history`. Re-runs only write history when the label, confidence, or evidence actually changes. Scored wallets that no longer qualify have their heuristic label cleared (also audited); add `--label-keep-stale` to skip that. Manual labels are protected by default; add `--label-overwrite-manual` only when intentionally replacing manually curated labels.
 
 `node ./node_modules/tsx/dist/cli.mjs src/labelingReviewSample.ts --label-source=heuristic_rubric_v1 --label-token=SOUL --label-per-label=8 --label-max-total=80`
 : Produces a stratified manual-review sample in `labeling-review-sample.json` with current label evidence, recent activity, and blank review fields to annotate.
@@ -791,7 +798,7 @@ Example response:
       "label": "Hub",
       "labelType": "hub",
       "labelSource": "heuristic_rubric_v1",
-      "labelVersion": "label-rubric-v1",
+      "labelVersion": "label-rubric-v2",
       "labelConfidence": 0.92,
       "labelUpdatedAt": "2026-05-27T00:20:15.445Z",
       "labelEvidence": {},

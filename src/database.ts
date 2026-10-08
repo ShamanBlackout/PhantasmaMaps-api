@@ -27,6 +27,7 @@ import {
   type TokenTopMoverRecord,
   type TopHoldersResult,
 } from "./phantasma.types";
+import { isPathTerminalLabel } from "./labelingRubric";
 
 type DbConnectionConfig = {
   connectionString?: string;
@@ -3198,26 +3199,7 @@ export async function findAddressPaths(options: {
       const address = String(row.address || "").trim();
       if (!address) return;
 
-      const labelType = String(row.label_type || "")
-        .trim()
-        .toLowerCase();
-      const label = String(row.label || "")
-        .trim()
-        .toLowerCase();
-
-      const isHub = labelType.includes("hub") || label.includes("hub");
-      const isHighInbound =
-        labelType.includes("high_inbound") ||
-        labelType.includes("high inbound") ||
-        label.includes("high_inbound") ||
-        label.includes("high inbound");
-      const isHighOutbound =
-        labelType.includes("high_outbound") ||
-        labelType.includes("high outbound") ||
-        label.includes("high_outbound") ||
-        label.includes("high outbound");
-
-      if (isHub || isHighInbound || isHighOutbound) {
+      if (isPathTerminalLabel(row.label_type, row.label)) {
         terminalAddressSet.add(address);
       }
     });
