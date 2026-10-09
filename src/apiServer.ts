@@ -32,6 +32,11 @@ import {
   testDatabaseConnection,
 } from "./database";
 import type { Server } from "http";
+import {
+  createTokenPriceService,
+  parseCoinGeckoIds,
+  type TokenPriceQuote,
+} from "./priceService";
 
 type ApiErrorCode =
   | "INVALID_REQUEST"
@@ -151,7 +156,17 @@ export type ApiServerDeps = {
     page: number;
     pageSize: number;
   }) => Promise<unknown>;
+  getTokenPriceImpl?: (tokenSymbol: string) => Promise<TokenPriceQuote>;
 };
+
+const tokenPriceService = createTokenPriceService({
+  saturnxBaseUrl: apiConfig.priceSaturnxBaseUrl,
+  saturnxNetwork: apiConfig.priceSaturnxNetwork,
+  explorerTokensUrl: apiConfig.priceExplorerTokensUrl,
+  coingeckoIds: parseCoinGeckoIds(apiConfig.priceCoingeckoIds),
+  freshTtlMs: apiConfig.priceCacheTtlMs,
+  staleMaxMs: apiConfig.priceStaleMaxMs,
+});
 
 const defaultDeps: ApiServerDeps = {
   rpcClient: createPhantasmaRpcClient(),
@@ -177,6 +192,7 @@ const defaultDeps: ApiServerDeps = {
   getTokenDailyMetricsImpl: getTokenDailyMetrics,
   getTokenTopMoversImpl: getTokenTopMovers,
   getLabeledNodesImpl: getLabeledNodes,
+  getTokenPriceImpl: tokenPriceService.getQuote,
 };
 
 function readPositiveInt(value: string | undefined, fallback: number): number {
@@ -1939,6 +1955,33 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           windowDays,
           limit,
           items,
+        });
+      } catch (error: unknown) {
+        handleRouteError(response, error);
+      }
+    },
+  );
+
+  app.get(
+    "/prices/:tokenSymbol",
+    async (request: Request, response: Response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol },
+          );
+        }
+
+        const getTokenPrice =
+          deps.getTokenPriceImpl ?? tokenPriceService.getQuote;
+        const quote = await getTokenPrice(tokenSymbol);
+        sendSuccess(request, response, quote, {
+          source: quote.source ?? "none",
+          stale: quote.stale,
         });
       } catch (error: unknown) {
         handleRouteError(response, error);

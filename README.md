@@ -277,6 +277,35 @@ main DB, updates `api_query_cache`, and serves the fresh response.
 `PHANTASMA_API_CORS_ORIGINS`
 : Comma-separated allowed origins. If omitted, CORS is permissive.
 
+### Token Prices
+
+Prices are fetched server-side so browsers never contact third-party price feeds
+(which may be blocked by ISP filters or rate-limited per visitor IP). Sources are
+queried in parallel and preferred in this order: SaturnX, CoinGecko (only for
+symbols with a configured id), Phantasma explorer. Quotes are cached in memory;
+if every source fails, the last good quote is served with `stale: true`.
+
+`PRICE_SATURNX_API_URL`
+: SaturnX tokens endpoint. Default: `https://apiops.saturnx.cc/v1/tokens`.
+
+`PRICE_SATURNX_NETWORK`
+: SaturnX network query value. Default: `mainnet`.
+
+`PRICE_EXPLORER_TOKENS_API_URL`
+: Phantasma explorer tokens endpoint. Default:
+  `https://api-explorer.phantasma.info/api/v1/tokens`.
+
+`PRICE_COINGECKO_IDS`
+: Comma-separated `SYMBOL:coingecko-id` pairs. Default:
+  `SOUL:phantasma,KCAL:phantasma-energy`.
+
+`PRICE_CACHE_TTL_MS`
+: Fresh quote lifetime. Default: `60000`.
+
+`PRICE_STALE_MAX_MS`
+: How long the last good quote may be served when all sources fail. Default:
+  `3600000`.
+
 ### RPC
 
 `PHANTASMA_RPC_URLS`
@@ -722,6 +751,31 @@ Example response:
   },
   "metadata": {},
   "updatedAt": "2026-04-08T09:40:12.000Z"
+}
+```
+
+### `GET /prices/:tokenSymbol`
+
+Returns the cached USD quote for a token. When no source has a price (for
+example NFTs), `priceUsd` and `source` are `null`. `priceChange24h` is `null`
+when the winning sources do not provide 24h movement.
+
+Example request:
+
+```bash
+curl http://localhost:3000/prices/KCAL
+```
+
+Example `data` payload:
+
+```json
+{
+  "tokenSymbol": "KCAL",
+  "priceUsd": 2.4738e-8,
+  "priceChange24h": null,
+  "source": "coingecko",
+  "fetchedAt": "2026-10-09T13:58:41.793Z",
+  "stale": false
 }
 ```
 
