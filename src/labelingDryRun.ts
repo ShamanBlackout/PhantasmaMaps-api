@@ -1,11 +1,24 @@
 import * as fs from "fs";
 import * as path from "path";
+import type { PoolClient } from "pg";
 import { CHAIN_SYNC_TOKEN } from "./phantasma.types";
 import {
   closeDatabasePool,
   databasePool,
   withDatabaseTransaction,
 } from "./database";
+import {
+  CandidateCode,
+  DEFAULT_LABEL_SOURCE,
+  DEFAULT_LABEL_VERSION,
+  DEFAULT_RUBRIC_GUARDS,
+  LabelingMetrics,
+  RubricGuards,
+  classifyCandidate,
+  computeLabelConfidence,
+  toDisplayLabel,
+  toLabelType,
+} from "./labelingRubric";
 
 const OUTPUT_FILE = path.resolve("labeling-dry-run.json");
 
@@ -23,7 +36,13 @@ function readOptionalNpmConfig(name: string): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+type RawLabelingRow = Omit<
+  LabelingCandidateRow,
+  "candidate_label" | "population_size"
+>;
+
 interface LabelingCandidateRow {
+  population_size: number;
   token_symbol: string;
   address: string;
   in_tx_count: string;
@@ -42,17 +61,19 @@ interface LabelingCandidateRow {
   high_outbound: boolean;
   high_in_counterparties: boolean;
   high_out_counterparties: boolean;
-  candidate_label: string;
+  candidate_label: CandidateCode;
 }
 
 interface DryRunSummaryByToken {
   tokenSymbol: string;
   addressesScored: number;
+  belowMinPopulation: boolean;
   highInboundCount: number;
   highOutboundCount: number;
   hubReceiverCount: number;
   distributorCount: number;
-  routerLikeCount: number;
+  hubCount: number;
+  labeledCount: number;
 }
 
 interface LabelingDryRunOutput {
@@ -69,11 +90,14 @@ interface LabelingDryRunOutput {
     applySkippedByConfidence: number;
     applySkippedByLimit: number;
     applySkippedByNormal: number;
+    clearStaleLabels: boolean;
+    clearedRows: number;
     minConfidence: number;
     maxUpdates: number;
     protectManualLabels: boolean;
     includeNormalLabels: boolean;
     labelVersion: string;
+    rubricGuards: RubricGuards;
     batchTokens: boolean;
     tokensProcessed: number;
     skippedTokens: string[];
@@ -83,7 +107,9 @@ interface LabelingDryRunOutput {
   topCandidates: Array<{
     tokenSymbol: string;
     address: string;
-    candidateLabel: string;
+    candidateLabel: CandidateCode;
+    displayLabel: string;
+    labelConfidence: number;
     inTxCount: number;
     outTxCount: number;
     inUniqueCounterparties: number;
@@ -265,6 +291,7 @@ function clamp(value: number, min: number, max: number): number {
 interface LabelApplyCandidate {
   tokenSymbol: string;
   address: string;
+  code: CandidateCode;
   label: string;
   labelType: string;
   labelSource: string;
@@ -279,6 +306,8 @@ interface ApplyLabelsOptions {
   maxUpdates: number;
   protectManualLabels: boolean;
   includeNormalLabels: boolean;
+  clearStaleLabels: boolean;
+  clearableSources: string[];
   labelSource: string;
   labelVersion: string;
   changedBy: string;
@@ -290,69 +319,56 @@ interface ApplyLabelsResult {
   applySkippedByConfidence: number;
   applySkippedByLimit: number;
   applySkippedByNormal: number;
+  clearedRows: number;
 }
 
-function mapLabelType(candidateLabel: string): string {
-  if (candidateLabel === "hub_receiver") {
-    return "receiver";
-  }
-
-  if (candidateLabel === "distributor") {
-    return "distributor";
-  }
-
-  if (candidateLabel === "Hub") {
-    return "hub";
-  }
-
-  if (candidateLabel === "high_inbound_activity") {
-    return "inbound_activity";
-  }
-
-  if (candidateLabel === "high_outbound_activity") {
-    return "outbound_activity";
-  }
-
-  return "normal";
-}
-
-function computeLabelConfidence(row: LabelingCandidateRow): number {
-  const candidateLabel = String(row.candidate_label);
-  const baseByLabel: Record<string, number> = {
-    hub_receiver: 0.86,
-    distributor: 0.86,
-    Hub: 0.9,
-    high_inbound_activity: 0.78,
-    high_outbound_activity: 0.78,
-    normal: 0.35,
+function toLabelingMetrics(row: LabelingCandidateRow | RawLabelingRow): LabelingMetrics {
+  return {
+    inTxCount: toNumber(row.in_tx_count),
+    outTxCount: toNumber(row.out_tx_count),
+    inUniqueCounterparties: toNumber(row.in_unique_counterparties),
+    outUniqueCounterparties: toNumber(row.out_unique_counterparties),
+    inVolume: toNumber(row.in_volume),
+    outVolume: toNumber(row.out_volume),
+    inPercentRank: toNumber(row.in_percent_rank),
+    outPercentRank: toNumber(row.out_percent_rank),
+    inZScoreLog: toNullableNumber(row.in_z_score_log),
+    outZScoreLog: toNullableNumber(row.out_z_score_log),
+    inMadScoreLog: toNullableNumber(row.in_mad_score_log),
+    outMadScoreLog: toNullableNumber(row.out_mad_score_log),
+    highInbound: Boolean(row.high_inbound),
+    highOutbound: Boolean(row.high_outbound),
+    highInCounterparties: Boolean(row.high_in_counterparties),
+    highOutCounterparties: Boolean(row.high_out_counterparties),
   };
+}
 
-  let confidence = baseByLabel[candidateLabel] ?? 0.4;
-
-  const inMad = toNullableNumber(row.in_mad_score_log) ?? 0;
-  const outMad = toNullableNumber(row.out_mad_score_log) ?? 0;
-  const inZ = toNullableNumber(row.in_z_score_log) ?? 0;
-  const outZ = toNullableNumber(row.out_z_score_log) ?? 0;
-  const inRank = toNumber(row.in_percent_rank);
-  const outRank = toNumber(row.out_percent_rank);
-
-  if (Math.max(inMad, outMad) >= 3) {
-    confidence += 0.05;
+function classifyRows(
+  rows: RawLabelingRow[],
+  guards: RubricGuards,
+): LabelingCandidateRow[] {
+  const populationByToken = new Map<string, number>();
+  for (const row of rows) {
+    const token = String(row.token_symbol);
+    populationByToken.set(token, (populationByToken.get(token) ?? 0) + 1);
   }
 
-  if (Math.max(inZ, outZ) >= 2) {
-    confidence += 0.03;
-  }
+  return rows.map((row) => {
+    const populationSize = populationByToken.get(String(row.token_symbol)) ?? 0;
+    return {
+      ...row,
+      population_size: populationSize,
+      candidate_label: classifyCandidate(
+        toLabelingMetrics(row),
+        populationSize,
+        guards,
+      ),
+    };
+  });
+}
 
-  if (Math.max(inRank, outRank) >= 0.99) {
-    confidence += 0.03;
-  }
-
-  if (row.high_inbound && row.high_outbound) {
-    confidence += 0.02;
-  }
-
-  return clamp(Number(confidence.toFixed(4)), 0, 0.99);
+function roundStat<T extends number | null>(value: T): T {
+  return (value === null ? null : Number(value.toFixed(4))) as T;
 }
 
 function buildApplyCandidate(
@@ -362,42 +378,46 @@ function buildApplyCandidate(
     "labelSource" | "labelVersion" | "changedBy"
   >,
 ): LabelApplyCandidate {
-  const label = String(row.candidate_label);
-  const labelType = mapLabelType(label);
-  const labelConfidence = computeLabelConfidence(row);
+  const code = row.candidate_label;
+  const metrics = toLabelingMetrics(row);
+  const labelType = toLabelType(code);
+  const labelConfidence = computeLabelConfidence(
+    code,
+    metrics,
+    row.population_size,
+  );
 
+  const { highInbound, highOutbound, highInCounterparties, highOutCounterparties, ...numericMetrics } = metrics;
   const labelEvidence = {
     model: "labelingDryRun",
     rubricVersion: options.labelVersion,
     computedAt: new Date().toISOString(),
-    candidateLabel: label,
+    candidateLabel: code,
     labelType,
+    populationSize: row.population_size,
+    // Rounded so float jitter from ongoing syncs doesn't register as a label change.
     metrics: {
-      inTxCount: toNumber(row.in_tx_count),
-      outTxCount: toNumber(row.out_tx_count),
-      inUniqueCounterparties: toNumber(row.in_unique_counterparties),
-      outUniqueCounterparties: toNumber(row.out_unique_counterparties),
-      inVolume: toNumber(row.in_volume),
-      outVolume: toNumber(row.out_volume),
-      inPercentRank: toNumber(row.in_percent_rank),
-      outPercentRank: toNumber(row.out_percent_rank),
-      inZScoreLog: toNullableNumber(row.in_z_score_log),
-      outZScoreLog: toNullableNumber(row.out_z_score_log),
-      inMadScoreLog: toNullableNumber(row.in_mad_score_log),
-      outMadScoreLog: toNullableNumber(row.out_mad_score_log),
+      ...numericMetrics,
+      inPercentRank: roundStat(numericMetrics.inPercentRank),
+      outPercentRank: roundStat(numericMetrics.outPercentRank),
+      inZScoreLog: roundStat(numericMetrics.inZScoreLog),
+      outZScoreLog: roundStat(numericMetrics.outZScoreLog),
+      inMadScoreLog: roundStat(numericMetrics.inMadScoreLog),
+      outMadScoreLog: roundStat(numericMetrics.outMadScoreLog),
     },
     flags: {
-      highInbound: row.high_inbound,
-      highOutbound: row.high_outbound,
-      highInCounterparties: row.high_in_counterparties,
-      highOutCounterparties: row.high_out_counterparties,
+      highInbound,
+      highOutbound,
+      highInCounterparties,
+      highOutCounterparties,
     },
   };
 
   return {
     tokenSymbol: String(row.token_symbol),
     address: String(row.address),
-    label,
+    code,
+    label: toDisplayLabel(code),
     labelType,
     labelSource: options.labelSource,
     labelVersion: options.labelVersion,
@@ -413,6 +433,7 @@ async function applyLabelsToNodes(
 ): Promise<ApplyLabelsResult> {
   let applySkippedByNormal = 0;
   let applySkippedByConfidence = 0;
+  const rejected: LabelApplyCandidate[] = [];
 
   const candidates = rows
     .map((row) =>
@@ -423,13 +444,15 @@ async function applyLabelsToNodes(
       }),
     )
     .filter((candidate) => {
-      if (!options.includeNormalLabels && candidate.label === "normal") {
+      if (!options.includeNormalLabels && candidate.code === "normal") {
         applySkippedByNormal += 1;
+        rejected.push(candidate);
         return false;
       }
 
       if (candidate.labelConfidence < options.minConfidence) {
         applySkippedByConfidence += 1;
+        rejected.push(candidate);
         return false;
       }
 
@@ -444,18 +467,22 @@ async function applyLabelsToNodes(
     candidates.length - options.maxUpdates,
   );
 
-  if (boundedCandidates.length === 0) {
+  const staleCandidates = options.clearStaleLabels ? rejected : [];
+
+  if (boundedCandidates.length === 0 && staleCandidates.length === 0) {
     return {
       appliedRows: 0,
       applyAttempts,
       applySkippedByConfidence,
       applySkippedByLimit,
       applySkippedByNormal,
+      clearedRows: 0,
     };
   }
 
   const BATCH_SIZE = 150;
   let appliedRows = 0;
+  let clearedRows = 0;
 
   await withDatabaseTransaction(async (client) => {
     for (let i = 0; i < boundedCandidates.length; i += BATCH_SIZE) {
@@ -465,10 +492,10 @@ async function applyLabelsToNodes(
 
       for (let rowIndex = 0; rowIndex < batch.length; rowIndex++) {
         const candidate = batch[rowIndex];
-        const base = rowIndex * 10;
+        const base = rowIndex * 9;
 
         placeholders.push(
-          `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`,
+          `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9})`,
         );
 
         values.push(
@@ -481,7 +508,6 @@ async function applyLabelsToNodes(
           candidate.labelConfidence,
           candidate.labelEvidenceJson,
           candidate.changedBy,
-          options.minConfidence,
         );
       }
 
@@ -510,8 +536,7 @@ async function applyLabelsToNodes(
              label_version,
              label_confidence,
              label_evidence,
-             changed_by,
-             min_confidence
+             changed_by
            )
          ),
          to_update AS (
@@ -537,9 +562,8 @@ async function applyLabelsToNodes(
               OR n.label_type IS DISTINCT FROM i.new_label_type
               OR n.label_source IS DISTINCT FROM i.label_source
               OR n.label_version IS DISTINCT FROM i.label_version
-              OR n.label_confidence IS NULL
-              OR n.label_confidence < i.label_confidence
-              OR n.label_evidence IS DISTINCT FROM i.label_evidence
+              OR n.label_confidence IS DISTINCT FROM i.label_confidence
+              OR (n.label_evidence - 'computedAt') IS DISTINCT FROM (i.label_evidence - 'computedAt')
             )
          ),
          updated AS (
@@ -605,6 +629,11 @@ async function applyLabelsToNodes(
 
       appliedRows += Number(queryResult.rows[0]?.updated_count ?? 0);
     }
+
+    for (let i = 0; i < staleCandidates.length; i += BATCH_SIZE) {
+      const batch = staleCandidates.slice(i, i + BATCH_SIZE);
+      clearedRows += await clearStaleLabelBatch(client, batch, options);
+    }
   });
 
   return {
@@ -613,7 +642,90 @@ async function applyLabelsToNodes(
     applySkippedByConfidence,
     applySkippedByLimit,
     applySkippedByNormal,
+    clearedRows,
   };
+}
+
+// Removes heuristic labels from wallets that no longer qualify, so labels track current behaviour.
+// Only labels owned by heuristic sources are cleared; manual and other sources are never touched.
+async function clearStaleLabelBatch(
+  client: PoolClient,
+  batch: LabelApplyCandidate[],
+  options: ApplyLabelsOptions,
+): Promise<number> {
+  const result = await client.query<{ cleared_count: string }>(
+    `WITH stale AS (
+       SELECT s.token_symbol, s.address
+         FROM UNNEST($1::text[], $2::text[]) AS s(token_symbol, address)
+     ),
+     to_clear AS (
+       SELECT n.address,
+              n.token_symbol,
+              n.label AS previous_label,
+              n.label_type AS previous_label_type
+         FROM stale s
+         JOIN nodes n
+           ON n.address = s.address
+          AND n.token_symbol = s.token_symbol
+        WHERE n.label IS NOT NULL
+          AND n.label_source = ANY($3::text[])
+     ),
+     cleared AS (
+       UPDATE nodes n
+          SET label = NULL,
+              label_type = NULL,
+              label_source = NULL,
+              label_confidence = NULL,
+              label_evidence = '{}'::jsonb,
+              label_version = NULL,
+              label_updated_at = NOW()
+         FROM to_clear t
+        WHERE n.address = t.address
+          AND n.token_symbol = t.token_symbol
+       RETURNING t.address, t.token_symbol, t.previous_label, t.previous_label_type
+     ),
+     history_insert AS (
+       INSERT INTO node_label_history (
+         address,
+         token_symbol,
+         previous_label,
+         previous_label_type,
+         new_label,
+         new_label_type,
+         label_source,
+         label_confidence,
+         label_evidence,
+         label_version,
+         changed_by,
+         changed_at
+       )
+       SELECT address,
+              token_symbol,
+              previous_label,
+              previous_label_type,
+              NULL,
+              NULL,
+              $4::text,
+              NULL,
+              jsonb_build_object('reason', 'stale_heuristic_label'),
+              $5::text,
+              $6::text,
+              NOW()
+         FROM cleared
+       RETURNING 1
+     )
+     SELECT COUNT(*)::text AS cleared_count FROM history_insert`,
+    [
+      batch.map((candidate) => candidate.tokenSymbol),
+      batch.map((candidate) => candidate.address),
+      options.clearableSources,
+      options.labelSource,
+      options.labelVersion,
+      options.changedBy,
+    ],
+  );
+
+  return Number(result.rows[0]?.cleared_count ?? 0);
 }
 
 async function persistLabelScores(
@@ -766,14 +878,14 @@ async function runLabelingQuery(
   text: string,
   values: Array<string | number>,
   queryTimeoutMs: number,
-): Promise<LabelingCandidateRow[]> {
+): Promise<RawLabelingRow[]> {
   const queryConfig = {
     text,
     values,
     query_timeout: queryTimeoutMs,
     statement_timeout: queryTimeoutMs,
   } as any;
-  const result = await databasePool.query<LabelingCandidateRow>(queryConfig);
+  const result = await databasePool.query<RawLabelingRow>(queryConfig);
 
   return result.rows;
 }
@@ -784,7 +896,7 @@ async function fetchLabelingCandidates(options: {
   batchTokens: boolean;
   queryTimeoutMs: number;
 }): Promise<{
-  rows: LabelingCandidateRow[];
+  rows: RawLabelingRow[];
   tokensProcessed: number;
   skippedTokens: string[];
 }> {
@@ -833,7 +945,7 @@ async function fetchLabelingCandidates(options: {
   );
 
   const tokens = tokenResult.rows.map((row) => String(row.token_symbol));
-  const allRows: LabelingCandidateRow[] = [];
+  const allRows: RawLabelingRow[] = [];
   const skippedTokens: string[] = [];
 
   for (const token of tokens) {
@@ -947,6 +1059,10 @@ function buildLabelingQuery(
       SELECT token_symbol,
              PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY in_tx_count) AS in_tx_p95,
              PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY out_tx_count) AS out_tx_p95,
+             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY in_tx_count) AS in_tx_median,
+             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY out_tx_count) AS out_tx_median,
+             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY in_unique_counterparties) AS in_cp_median,
+             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY out_unique_counterparties) AS out_cp_median,
              PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY in_unique_counterparties) AS in_cp_p99,
              PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY out_unique_counterparties) AS out_cp_p99,
              AVG(in_log) AS in_log_mean,
@@ -1002,10 +1118,10 @@ function buildLabelingQuery(
                  THEN (lm.out_log - d.out_log_median) / (1.4826::numeric * m.out_log_mad)
                ELSE NULL
              END AS out_mad_score_log,
-             (lm.in_tx_count >= d.in_tx_p95 OR COALESCE((lm.in_log - d.in_log_mean) / NULLIF(d.in_log_stddev, 0::numeric), 0::numeric) >= 2::numeric OR COALESCE((lm.in_log - d.in_log_median) / NULLIF(1.4826::numeric * m.in_log_mad, 0::numeric), 0::numeric) >= 3::numeric) AS high_inbound,
-             (lm.out_tx_count >= d.out_tx_p95 OR COALESCE((lm.out_log - d.out_log_mean) / NULLIF(d.out_log_stddev, 0::numeric), 0::numeric) >= 2::numeric OR COALESCE((lm.out_log - d.out_log_median) / NULLIF(1.4826::numeric * m.out_log_mad, 0::numeric), 0::numeric) >= 3::numeric) AS high_outbound,
-             (lm.in_unique_counterparties >= d.in_cp_p99) AS high_in_counterparties,
-             (lm.out_unique_counterparties >= d.out_cp_p99) AS high_out_counterparties
+             ((lm.in_tx_count >= d.in_tx_p95 AND lm.in_tx_count > d.in_tx_median) OR COALESCE((lm.in_log - d.in_log_mean) / NULLIF(d.in_log_stddev, 0::numeric), 0::numeric) >= 2::numeric OR COALESCE((lm.in_log - d.in_log_median) / NULLIF(1.4826::numeric * m.in_log_mad, 0::numeric), 0::numeric) >= 3::numeric) AS high_inbound,
+             ((lm.out_tx_count >= d.out_tx_p95 AND lm.out_tx_count > d.out_tx_median) OR COALESCE((lm.out_log - d.out_log_mean) / NULLIF(d.out_log_stddev, 0::numeric), 0::numeric) >= 2::numeric OR COALESCE((lm.out_log - d.out_log_median) / NULLIF(1.4826::numeric * m.out_log_mad, 0::numeric), 0::numeric) >= 3::numeric) AS high_outbound,
+             (lm.in_unique_counterparties >= d.in_cp_p99 AND lm.in_unique_counterparties > d.in_cp_median) AS high_in_counterparties,
+             (lm.out_unique_counterparties >= d.out_cp_p99 AND lm.out_unique_counterparties > d.out_cp_median) AS high_out_counterparties
         FROM log_metrics lm
         JOIN distribution d
           ON d.token_symbol = lm.token_symbol
@@ -1029,25 +1145,7 @@ function buildLabelingQuery(
            high_inbound,
            high_outbound,
            high_in_counterparties,
-           high_out_counterparties,
-           CASE
-             WHEN high_inbound
-              AND high_outbound
-              AND high_in_counterparties
-              AND high_out_counterparties
-              AND COALESCE(in_volume, 0::numeric) > 0::numeric
-              AND COALESCE(out_volume, 0::numeric) > 0::numeric
-              AND (
-                ABS(COALESCE(in_volume, 0::numeric) - COALESCE(out_volume, 0::numeric))
-                / NULLIF(GREATEST(COALESCE(in_volume, 0::numeric), COALESCE(out_volume, 0::numeric)), 0::numeric)
-              ) <= 0.35::numeric
-              THEN 'Hub'
-             WHEN high_outbound AND high_out_counterparties THEN 'distributor'
-             WHEN high_inbound AND high_in_counterparties THEN 'hub_receiver'
-             WHEN high_inbound THEN 'high_inbound_activity'
-             WHEN high_outbound THEN 'high_outbound_activity'
-             ELSE 'normal'
-           END AS candidate_label
+           high_out_counterparties
       FROM scored
      ORDER BY token_symbol ASC,
               GREATEST(
@@ -1061,6 +1159,7 @@ function buildLabelingQuery(
 
 function summarizeByToken(
   rows: LabelingCandidateRow[],
+  guards: RubricGuards,
 ): DryRunSummaryByToken[] {
   const buckets = new Map<string, DryRunSummaryByToken>();
 
@@ -1069,29 +1168,22 @@ function summarizeByToken(
     const existing = buckets.get(tokenSymbol) ?? {
       tokenSymbol,
       addressesScored: 0,
+      belowMinPopulation: row.population_size < guards.minPopulation,
       highInboundCount: 0,
       highOutboundCount: 0,
       hubReceiverCount: 0,
       distributorCount: 0,
-      routerLikeCount: 0,
+      hubCount: 0,
+      labeledCount: 0,
     };
 
     existing.addressesScored += 1;
-    if (row.high_inbound) {
-      existing.highInboundCount += 1;
-    }
-    if (row.high_outbound) {
-      existing.highOutboundCount += 1;
-    }
-    if (row.candidate_label === "hub_receiver") {
-      existing.hubReceiverCount += 1;
-    }
-    if (row.candidate_label === "distributor") {
-      existing.distributorCount += 1;
-    }
-    if (row.candidate_label === "Hub") {
-      existing.routerLikeCount += 1;
-    }
+    if (row.high_inbound) existing.highInboundCount += 1;
+    if (row.high_outbound) existing.highOutboundCount += 1;
+    if (row.candidate_label === "hub_receiver") existing.hubReceiverCount += 1;
+    if (row.candidate_label === "distributor") existing.distributorCount += 1;
+    if (row.candidate_label === "hub") existing.hubCount += 1;
+    if (row.candidate_label !== "normal") existing.labeledCount += 1;
 
     buckets.set(tokenSymbol, existing);
   }
@@ -1144,7 +1236,13 @@ function selectTopCandidates(
       topCandidates.push({
         tokenSymbol,
         address: String(row.address),
-        candidateLabel: String(row.candidate_label),
+        candidateLabel: row.candidate_label,
+        displayLabel: toDisplayLabel(row.candidate_label),
+        labelConfidence: computeLabelConfidence(
+          row.candidate_label,
+          toLabelingMetrics(row),
+          row.population_size,
+        ),
         inTxCount: toNumber(row.in_tx_count),
         outTxCount: toNumber(row.out_tx_count),
         inUniqueCounterparties: toNumber(row.in_unique_counterparties),
@@ -1220,9 +1318,26 @@ async function runLabelingDryRun(): Promise<void> {
   const maxUpdates =
     readOptionalIntArgAny(["label-max-updates", "max-updates"]) ?? 500;
   const labelSource =
-    readOptionalStringArgAny(["label-source"]) ?? "heuristic_rubric_v1";
+    readOptionalStringArgAny(["label-source"]) ?? DEFAULT_LABEL_SOURCE;
   const labelVersion =
-    readOptionalStringArgAny(["label-version"]) ?? "label-rubric-v1";
+    readOptionalStringArgAny(["label-version"]) ?? DEFAULT_LABEL_VERSION;
+  const clearStaleLabels = !readBooleanArgAny([
+    "label-keep-stale",
+    "keep-stale",
+  ]);
+  const rubricGuards: RubricGuards = {
+    minPopulation:
+      readOptionalIntArgAny(["label-min-population", "min-population"]) ??
+      DEFAULT_RUBRIC_GUARDS.minPopulation,
+    minDirectionalTx:
+      readOptionalIntArgAny(["label-min-tx", "min-tx"]) ??
+      DEFAULT_RUBRIC_GUARDS.minDirectionalTx,
+    minCounterparties:
+      readOptionalIntArgAny([
+        "label-min-counterparties",
+        "min-counterparties",
+      ]) ?? DEFAULT_RUBRIC_GUARDS.minCounterparties,
+  };
   const changedBy =
     readOptionalStringArgAny(["label-changed-by", "changed-by"]) ??
     "labelingDryRun";
@@ -1243,14 +1358,18 @@ async function runLabelingDryRun(): Promise<void> {
     }, token=${tokenFilter ?? "all"}, top-per-token=${topLimitPerToken}, persist-scores=${persistScores}, apply=${applyLabels}, batchTokens=${batchTokens}, queryTimeoutMs=${queryTimeoutMs})`,
   );
 
-  const candidateResult = await fetchLabelingCandidates({
+  const fetchResult = await fetchLabelingCandidates({
     effectiveWindowDays,
     tokenFilter,
     batchTokens,
     queryTimeoutMs,
   });
+  const candidateResult = {
+    ...fetchResult,
+    rows: classifyRows(fetchResult.rows, rubricGuards),
+  };
 
-  const summary = summarizeByToken(candidateResult.rows);
+  const summary = summarizeByToken(candidateResult.rows, rubricGuards);
   const topCandidates = selectTopCandidates(
     candidateResult.rows,
     topLimitPerToken,
@@ -1264,6 +1383,8 @@ async function runLabelingDryRun(): Promise<void> {
         maxUpdates,
         protectManualLabels,
         includeNormalLabels,
+        clearStaleLabels,
+        clearableSources: [...new Set([labelSource, DEFAULT_LABEL_SOURCE])],
         labelSource,
         labelVersion,
         changedBy,
@@ -1274,6 +1395,7 @@ async function runLabelingDryRun(): Promise<void> {
         applySkippedByConfidence: 0,
         applySkippedByLimit: 0,
         applySkippedByNormal: 0,
+        clearedRows: 0,
       };
 
   const output: LabelingDryRunOutput = {
@@ -1290,11 +1412,14 @@ async function runLabelingDryRun(): Promise<void> {
       applySkippedByConfidence: applyResult.applySkippedByConfidence,
       applySkippedByLimit: applyResult.applySkippedByLimit,
       applySkippedByNormal: applyResult.applySkippedByNormal,
+      clearStaleLabels,
+      clearedRows: applyResult.clearedRows,
       minConfidence,
       maxUpdates,
       protectManualLabels,
       includeNormalLabels,
       labelVersion,
+      rubricGuards,
       batchTokens,
       tokensProcessed: candidateResult.tokensProcessed,
       skippedTokens: candidateResult.skippedTokens,
@@ -1321,14 +1446,14 @@ async function runLabelingDryRun(): Promise<void> {
   }
   if (applyLabels) {
     console.log(
-      `Labels applied: ${output.metadata.appliedRows} (eligible=${output.metadata.applyAttempts}, skipped-confidence=${output.metadata.applySkippedByConfidence}, skipped-normal=${output.metadata.applySkippedByNormal}, skipped-limit=${output.metadata.applySkippedByLimit})`,
+      `Labels applied: ${output.metadata.appliedRows} (eligible=${output.metadata.applyAttempts}, skipped-confidence=${output.metadata.applySkippedByConfidence}, skipped-normal=${output.metadata.applySkippedByNormal}, skipped-limit=${output.metadata.applySkippedByLimit}, stale-cleared=${output.metadata.clearedRows})`,
     );
   }
   console.log(`Tokens scored: ${summary.length}`);
 
   for (const token of summary) {
     console.log(
-      `  ${token.tokenSymbol}: scored=${token.addressesScored}, highIn=${token.highInboundCount}, highOut=${token.highOutboundCount}, hubReceiver=${token.hubReceiverCount}, dist=${token.distributorCount}, Hub=${token.routerLikeCount}`,
+      `  ${token.tokenSymbol}: scored=${token.addressesScored}, highIn=${token.highInboundCount}, highOut=${token.highOutboundCount}, hubReceiver=${token.hubReceiverCount}, dist=${token.distributorCount}, hub=${token.hubCount}, labeled=${token.labeledCount}${token.belowMinPopulation ? " (below min population)" : ""}`,
     );
   }
 }

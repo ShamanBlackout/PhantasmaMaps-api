@@ -21,7 +21,9 @@
     "maintenance:zero-stale": "node ./node_modules/tsx/dist/cli.mjs src/zeroStaleTokenRows.ts",
     "find-first-transfer": "node ./node_modules/tsx/dist/cli.mjs src/findFirstTransferBlock.ts",
     "check": "tsc --noEmit",
+    "test": "node ./node_modules/tsx/dist/cli.mjs --test src/**/*.test.ts",
     "test:contract": "node ./node_modules/tsx/dist/cli.mjs --test src/**/*.contract.test.ts",
+    "test:unit": "node ./node_modules/tsx/dist/cli.mjs --test src/labelingRubric.test.ts",
     "test:rpc": "node ./node_modules/tsx/dist/cli.mjs src/connectPhantasma.ts",
     "test:db-snapshot": "node ./node_modules/tsx/dist/cli.mjs src/testDatabaseInserts.ts",
     "cleanup:claims": "node ./node_modules/tsx/dist/cli.mjs src/cleanupBlockClaims.ts"
@@ -40,9 +42,9 @@
     "@types/node": "^25.7.0",
     "@types/pg": "^8.20.0",
     "@types/supertest": "^7.2.0",
-    "esbuild": "^0.27.7",
+    "esbuild": "^0.28.2",
     "supertest": "^7.2.2",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3"
   }
 }

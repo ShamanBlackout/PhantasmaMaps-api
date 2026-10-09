@@ -769,31 +769,52 @@ async function runBlockRange(
 
           activeBlocks.delete(workerId);
 
-          commitQueue = commitQueue.then(async () => {
-            const committedThrough =
-              await advanceChainSyncHeightFromClaims(commitFallbackHeight);
-            const effectiveCommitHeight =
-              committedThrough ??
-              (await getChainSyncHeight()) ??
-              commitFallbackHeight;
-
-            if (result.blockHeight % syncConfig.blockLogInterval === 0) {
-              const activeSummary = [...activeBlocks.entries()]
-                .sort((left, right) => left[0] - right[0])
-                .map(([id, activeBlockHeight]) => `w${id}:${activeBlockHeight}`)
-                .join(", ");
-
-              console.log(
-                `Processed block ${result.blockHeight} with ${result.transferCount} transfer(s) across ${result.tokenSymbols.length} token(s); committedThrough=${effectiveCommitHeight}; active=[${activeSummary}]`,
+          commitQueue = commitQueue
+            .catch((error) => {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              console.warn(
+                `Commit queue recovered from prior error; continuing. error=${message}`,
               );
-            }
+              return commitFallbackHeight;
+            })
+            .then(async () => {
+              let effectiveCommitHeight = commitFallbackHeight;
 
-            if (syncConfig.interBlockDelayMs > 0) {
-              await sleep(syncConfig.interBlockDelayMs);
-            }
+              try {
+                const committedThrough =
+                  await advanceChainSyncHeightFromClaims(commitFallbackHeight);
+                effectiveCommitHeight =
+                  committedThrough ??
+                  (await getChainSyncHeight()) ??
+                  commitFallbackHeight;
+              } catch (error) {
+                const message =
+                  error instanceof Error ? error.message : String(error);
+                console.warn(
+                  `Commit advancement failed for block ${result.blockHeight}; continuing without stopping sync. error=${message}`,
+                );
+              }
 
-            return effectiveCommitHeight;
-          });
+              if (result.blockHeight % syncConfig.blockLogInterval === 0) {
+                const activeSummary = [...activeBlocks.entries()]
+                  .sort((left, right) => left[0] - right[0])
+                  .map(
+                    ([id, activeBlockHeight]) => `w${id}:${activeBlockHeight}`,
+                  )
+                  .join(", ");
+
+                console.log(
+                  `Processed block ${result.blockHeight} with ${result.transferCount} transfer(s) across ${result.tokenSymbols.length} token(s); committedThrough=${effectiveCommitHeight}; active=[${activeSummary}]`,
+                );
+              }
+
+              if (syncConfig.interBlockDelayMs > 0) {
+                await sleep(syncConfig.interBlockDelayMs);
+              }
+
+              return effectiveCommitHeight;
+            });
         } catch (error: unknown) {
           activeBlocks.delete(workerId);
           await failBlockSyncClaim(

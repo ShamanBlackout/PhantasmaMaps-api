@@ -6,7 +6,11 @@ var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -5622,106 +5626,141 @@ var require_on_finished = __commonJS({
   }
 });
 
-// node_modules/content-type/index.js
-var require_content_type = __commonJS({
-  "node_modules/content-type/index.js"(exports2) {
+// node_modules/type-is/node_modules/content-type/dist/index.js
+var require_dist = __commonJS({
+  "node_modules/type-is/node_modules/content-type/dist/index.js"(exports2) {
     "use strict";
-    var PARAM_REGEXP = /; *([!#$%&'*+.^_`|~0-9A-Za-z-]+) *= *("(?:[\u000b\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\u000b\u0020-\u00ff])*"|[!#$%&'*+.^_`|~0-9A-Za-z-]+) */g;
-    var TEXT_REGEXP = /^[\u000b\u0020-\u007e\u0080-\u00ff]+$/;
-    var TOKEN_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-    var QESC_REGEXP = /\\([\u000b\u0020-\u00ff])/g;
-    var QUOTE_REGEXP = /([\\"])/g;
-    var TYPE_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.format = format;
     exports2.parse = parse;
+    var TEXT_REGEXP = /^[\u0009\u0020-\u007e\u0080-\u00ff]*$/;
+    var TOKEN_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    var QUOTE_REGEXP = /[\\"]/g;
+    var TYPE_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    var NullObject = /* @__PURE__ */ (() => {
+      const C = function() {
+      };
+      C.prototype = /* @__PURE__ */ Object.create(null);
+      return C;
+    })();
     function format(obj) {
-      if (!obj || typeof obj !== "object") {
-        throw new TypeError("argument obj is required");
-      }
-      var parameters = obj.parameters;
-      var type = obj.type;
+      const { type, parameters } = obj;
       if (!type || !TYPE_REGEXP.test(type)) {
-        throw new TypeError("invalid type");
+        throw new TypeError(`Invalid type: ${type}`);
       }
-      var string = type;
-      if (parameters && typeof parameters === "object") {
-        var param;
-        var params = Object.keys(parameters).sort();
-        for (var i = 0; i < params.length; i++) {
-          param = params[i];
+      let result = type;
+      if (parameters) {
+        for (const param of Object.keys(parameters)) {
           if (!TOKEN_REGEXP.test(param)) {
-            throw new TypeError("invalid parameter name");
+            throw new TypeError(`Invalid parameter name: ${param}`);
           }
-          string += "; " + param + "=" + qstring(parameters[param]);
+          result += `; ${param}=${qstring(parameters[param])}`;
         }
       }
-      return string;
+      return result;
     }
-    function parse(string) {
-      if (!string) {
-        throw new TypeError("argument string is required");
+    function parse(header, options) {
+      const stopChar = options?.comma === true ? COMMA : 65536;
+      const len = header.length;
+      let index = skipOWS(header, options?.start ?? 0, len);
+      const valueStart = index;
+      index = skipValue(header, index, len, stopChar);
+      const valueEnd = trailingOWS(header, valueStart, index);
+      const type = header.slice(valueStart, valueEnd).toLowerCase();
+      if (options?.parameters === false) {
+        return { type, index, parameters: new NullObject() };
       }
-      var header = typeof string === "object" ? getcontenttype(string) : string;
-      if (typeof header !== "string") {
-        throw new TypeError("argument string is required to be a string");
-      }
-      var index = header.indexOf(";");
-      var type = index !== -1 ? header.slice(0, index).trim() : header.trim();
-      if (!TYPE_REGEXP.test(type)) {
-        throw new TypeError("invalid media type");
-      }
-      var obj = new ContentType(type.toLowerCase());
-      if (index !== -1) {
-        var key;
-        var match;
-        var value;
-        PARAM_REGEXP.lastIndex = index;
-        while (match = PARAM_REGEXP.exec(header)) {
-          if (match.index !== index) {
-            throw new TypeError("invalid parameter format");
-          }
-          index += match[0].length;
-          key = match[1].toLowerCase();
-          value = match[2];
-          if (value.charCodeAt(0) === 34) {
-            value = value.slice(1, -1);
-            if (value.indexOf("\\") !== -1) {
-              value = value.replace(QESC_REGEXP, "$1");
+      return parseParameters(header, type, index, len, stopChar);
+    }
+    var SP = 32;
+    var HTAB = 9;
+    var SEMI = 59;
+    var EQ = 61;
+    var DQUOTE = 34;
+    var BSLASH = 92;
+    var COMMA = 44;
+    function parseParameters(header, type, index, len, stopChar) {
+      const parameters = new NullObject();
+      parameter: while (index < len) {
+        if (header.charCodeAt(index) === stopChar)
+          break;
+        index = skipOWS(header, index + 1, len);
+        const keyStart = index;
+        while (index < len) {
+          const code = header.charCodeAt(index);
+          if (code === stopChar)
+            break parameter;
+          if (code === SEMI)
+            continue parameter;
+          if (code === EQ) {
+            const keyEnd = trailingOWS(header, keyStart, index);
+            const key = header.slice(keyStart, keyEnd).toLowerCase();
+            index = skipOWS(header, index + 1, len);
+            if (index < len && header.charCodeAt(index) === DQUOTE) {
+              index++;
+              let value = "";
+              while (index < len) {
+                const code2 = header.charCodeAt(index++);
+                if (code2 === DQUOTE) {
+                  index = skipValue(header, index, len, stopChar);
+                  if (parameters[key] === void 0)
+                    parameters[key] = value;
+                  break;
+                }
+                if (code2 === BSLASH && index < len) {
+                  value += header[index++];
+                  continue;
+                }
+                value += String.fromCharCode(code2);
+              }
+              continue parameter;
             }
+            const valueStart = index;
+            index = skipValue(header, index, len, stopChar);
+            if (parameters[key] === void 0) {
+              const valueEnd = trailingOWS(header, valueStart, index);
+              parameters[key] = header.slice(valueStart, valueEnd);
+            }
+            continue parameter;
           }
-          obj.parameters[key] = value;
-        }
-        if (index !== header.length) {
-          throw new TypeError("invalid parameter format");
+          index++;
         }
       }
-      return obj;
+      return { type, index, parameters };
     }
-    function getcontenttype(obj) {
-      var header;
-      if (typeof obj.getHeader === "function") {
-        header = obj.getHeader("content-type");
-      } else if (typeof obj.headers === "object") {
-        header = obj.headers && obj.headers["content-type"];
+    function skipValue(str, index, len, stopChar) {
+      while (index < len) {
+        const code = str.charCodeAt(index);
+        if (code === SEMI || code === stopChar)
+          break;
+        index++;
       }
-      if (typeof header !== "string") {
-        throw new TypeError("content-type header is missing from object");
-      }
-      return header;
+      return index;
     }
-    function qstring(val) {
-      var str = String(val);
-      if (TOKEN_REGEXP.test(str)) {
+    function skipOWS(header, index, len) {
+      while (index < len) {
+        const char = header.charCodeAt(index);
+        if (char !== SP && char !== HTAB)
+          break;
+        index++;
+      }
+      return index;
+    }
+    function trailingOWS(header, start, end) {
+      while (end > start) {
+        const char = header.charCodeAt(end - 1);
+        if (char !== SP && char !== HTAB)
+          break;
+        end--;
+      }
+      return end;
+    }
+    function qstring(str) {
+      if (TOKEN_REGEXP.test(str))
         return str;
-      }
-      if (str.length > 0 && !TEXT_REGEXP.test(str)) {
-        throw new TypeError("invalid parameter value");
-      }
-      return '"' + str.replace(QUOTE_REGEXP, "\\$1") + '"';
-    }
-    function ContentType(type) {
-      this.parameters = /* @__PURE__ */ Object.create(null);
-      this.type = type;
+      if (TEXT_REGEXP.test(str))
+        return `"${str.replace(QUOTE_REGEXP, "\\$&")}"`;
+      throw new TypeError(`Invalid parameter value: ${str}`);
     }
   }
 });
@@ -15305,7 +15344,7 @@ var require_media_typer = __commonJS({
 var require_type_is = __commonJS({
   "node_modules/type-is/index.js"(exports2, module2) {
     "use strict";
-    var contentType = require_content_type();
+    var contentType = require_dist();
     var mime = require_mime_types();
     var typer = require_media_typer();
     module2.exports = typeofrequest;
@@ -15314,9 +15353,12 @@ var require_type_is = __commonJS({
     module2.exports.normalize = normalize;
     module2.exports.match = mimeMatch;
     function typeis(value, types_) {
+      if (value && typeof value === "object") {
+        value = value.headers["content-type"];
+      }
       var i;
       var types2 = types_;
-      var val = tryNormalizeType(value);
+      var val = normalizeType(value);
       if (!val) {
         return false;
       }
@@ -15382,15 +15424,148 @@ var require_type_is = __commonJS({
       return true;
     }
     function normalizeType(value) {
-      var type = contentType.parse(value).type;
+      if (!value) return null;
+      var type = contentType.parse(value, { parameters: false }).type;
       return typer.test(type) ? type : null;
     }
-    function tryNormalizeType(value) {
-      try {
-        return value ? normalizeType(value) : null;
-      } catch (err) {
-        return null;
+  }
+});
+
+// node_modules/body-parser/node_modules/content-type/dist/index.js
+var require_dist2 = __commonJS({
+  "node_modules/body-parser/node_modules/content-type/dist/index.js"(exports2) {
+    "use strict";
+    Object.defineProperty(exports2, "__esModule", { value: true });
+    exports2.format = format;
+    exports2.parse = parse;
+    var TEXT_REGEXP = /^[\u0009\u0020-\u007e\u0080-\u00ff]*$/;
+    var TOKEN_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    var QUOTE_REGEXP = /[\\"]/g;
+    var TYPE_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    var NullObject = /* @__PURE__ */ (() => {
+      const C = function() {
+      };
+      C.prototype = /* @__PURE__ */ Object.create(null);
+      return C;
+    })();
+    function format(obj) {
+      const { type, parameters } = obj;
+      if (!type || !TYPE_REGEXP.test(type)) {
+        throw new TypeError(`Invalid type: ${type}`);
       }
+      let result = type;
+      if (parameters) {
+        for (const param of Object.keys(parameters)) {
+          if (!TOKEN_REGEXP.test(param)) {
+            throw new TypeError(`Invalid parameter name: ${param}`);
+          }
+          result += `; ${param}=${qstring(parameters[param])}`;
+        }
+      }
+      return result;
+    }
+    function parse(header, options) {
+      const stopChar = options?.comma === true ? COMMA : 65536;
+      const len = header.length;
+      let index = skipOWS(header, options?.start ?? 0, len);
+      const valueStart = index;
+      index = skipValue(header, index, len, stopChar);
+      const valueEnd = trailingOWS(header, valueStart, index);
+      const type = header.slice(valueStart, valueEnd).toLowerCase();
+      if (options?.parameters === false) {
+        return { type, index, parameters: new NullObject() };
+      }
+      return parseParameters(header, type, index, len, stopChar);
+    }
+    var SP = 32;
+    var HTAB = 9;
+    var SEMI = 59;
+    var EQ = 61;
+    var DQUOTE = 34;
+    var BSLASH = 92;
+    var COMMA = 44;
+    function parseParameters(header, type, index, len, stopChar) {
+      const parameters = new NullObject();
+      parameter: while (index < len) {
+        if (header.charCodeAt(index) === stopChar)
+          break;
+        index = skipOWS(header, index + 1, len);
+        const keyStart = index;
+        while (index < len) {
+          const code = header.charCodeAt(index);
+          if (code === stopChar)
+            break parameter;
+          if (code === SEMI)
+            continue parameter;
+          if (code === EQ) {
+            const keyEnd = trailingOWS(header, keyStart, index);
+            const key = header.slice(keyStart, keyEnd).toLowerCase();
+            index = skipOWS(header, index + 1, len);
+            if (index < len && header.charCodeAt(index) === DQUOTE) {
+              index++;
+              let value = "";
+              while (index < len) {
+                const code2 = header.charCodeAt(index++);
+                if (code2 === DQUOTE) {
+                  index = skipValue(header, index, len, stopChar);
+                  if (parameters[key] === void 0)
+                    parameters[key] = value;
+                  break;
+                }
+                if (code2 === BSLASH && index < len) {
+                  value += header[index++];
+                  continue;
+                }
+                value += String.fromCharCode(code2);
+              }
+              continue parameter;
+            }
+            const valueStart = index;
+            index = skipValue(header, index, len, stopChar);
+            if (parameters[key] === void 0) {
+              const valueEnd = trailingOWS(header, valueStart, index);
+              parameters[key] = header.slice(valueStart, valueEnd);
+            }
+            continue parameter;
+          }
+          index++;
+        }
+      }
+      return { type, index, parameters };
+    }
+    function skipValue(str, index, len, stopChar) {
+      while (index < len) {
+        const code = str.charCodeAt(index);
+        if (code === SEMI || code === stopChar)
+          break;
+        index++;
+      }
+      return index;
+    }
+    function skipOWS(header, index, len) {
+      while (index < len) {
+        const char = header.charCodeAt(index);
+        if (char !== SP && char !== HTAB)
+          break;
+        index++;
+      }
+      return index;
+    }
+    function trailingOWS(header, start, end) {
+      while (end > start) {
+        const char = header.charCodeAt(end - 1);
+        if (char !== SP && char !== HTAB)
+          break;
+        end--;
+      }
+      return end;
+    }
+    function qstring(str) {
+      if (TOKEN_REGEXP.test(str))
+        return str;
+      if (TEXT_REGEXP.test(str))
+        return `"${str.replace(QUOTE_REGEXP, "\\$&")}"`;
+      throw new TypeError(`Invalid parameter value: ${str}`);
     }
   }
 });
@@ -15400,7 +15575,7 @@ var require_utils = __commonJS({
   "node_modules/body-parser/lib/utils.js"(exports2, module2) {
     "use strict";
     var bytes = require_bytes();
-    var contentType = require_content_type();
+    var contentType = require_dist2();
     var typeis = require_type_is();
     module2.exports = {
       getCharset,
@@ -15408,11 +15583,9 @@ var require_utils = __commonJS({
       passthrough
     };
     function getCharset(req) {
-      try {
-        return (contentType.parse(req).parameters.charset || "").toLowerCase();
-      } catch {
-        return void 0;
-      }
+      const header = req.headers["content-type"];
+      if (!header) return void 0;
+      return contentType.parse(header).parameters.charset?.toLowerCase();
     }
     function typeChecker(type) {
       return function checkType(req) {
@@ -15423,15 +15596,18 @@ var require_utils = __commonJS({
       if (!defaultType) {
         throw new TypeError("defaultType must be provided");
       }
-      var inflate = options?.inflate !== false;
-      var limit = typeof options?.limit !== "number" ? bytes.parse(options?.limit || "100kb") : options?.limit;
-      var type = options?.type || defaultType;
-      var verify2 = options?.verify || false;
-      var defaultCharset = options?.defaultCharset || "utf-8";
+      const inflate = options?.inflate !== false;
+      const limit = typeof options?.limit === "undefined" || options?.limit === null ? 102400 : bytes.parse(options.limit);
+      const type = options?.type || defaultType;
+      const verify2 = options?.verify || false;
+      const defaultCharset = options?.defaultCharset || "utf-8";
+      if (limit === null) {
+        throw new TypeError(`option limit "${String(options.limit)}" is invalid`);
+      }
       if (verify2 !== false && typeof verify2 !== "function") {
         throw new TypeError("option verify must be function");
       }
-      var shouldParse = typeof type !== "function" ? typeChecker(type) : type;
+      const shouldParse = typeof type !== "function" ? typeChecker(type) : type;
       return {
         inflate,
         limit,
@@ -15478,7 +15654,7 @@ var require_read = __commonJS({
         next();
         return;
       }
-      var encoding = null;
+      let encoding = null;
       if (options?.skipCharset !== true) {
         encoding = getCharset(req) || options.defaultCharset;
         if (!!options?.isValidCharset && !options.isValidCharset(encoding)) {
@@ -15490,10 +15666,10 @@ var require_read = __commonJS({
           return;
         }
       }
-      var length;
-      var opts = options;
-      var stream;
-      var verify2 = opts.verify;
+      let length;
+      const opts = options;
+      let stream;
+      const verify2 = opts.verify;
       try {
         stream = contentstream(req, debug, opts.inflate);
         length = stream.length;
@@ -15512,7 +15688,7 @@ var require_read = __commonJS({
       debug("read body");
       getBody(stream, opts, function(error, body) {
         if (error) {
-          var _error;
+          let _error;
           if (error.type === "encoding.unsupported") {
             _error = createError(415, 'unsupported charset "' + encoding.toUpperCase() + '"', {
               charset: encoding.toLowerCase(),
@@ -15542,7 +15718,7 @@ var require_read = __commonJS({
             return;
           }
         }
-        var str = body;
+        let str = body;
         try {
           debug("parse body");
           str = typeof body !== "string" && encoding !== null ? iconv.decode(body, encoding) : body;
@@ -15558,8 +15734,8 @@ var require_read = __commonJS({
       });
     }
     function contentstream(req, debug, inflate) {
-      var encoding = (req.headers["content-encoding"] || "identity").toLowerCase();
-      var length = req.headers["content-length"];
+      const encoding = (req.headers["content-encoding"] || "identity").toLowerCase();
+      const length = req.headers["content-length"];
       debug('content-encoding "%s"', encoding);
       if (inflate === false && encoding !== "identity") {
         throw createError(415, "content encoding unsupported", {
@@ -15571,7 +15747,7 @@ var require_read = __commonJS({
         req.length = length;
         return req;
       }
-      var stream = createDecompressionStream(encoding, debug);
+      const stream = createDecompressionStream(encoding, debug);
       req.pipe(stream);
       return stream;
     }
@@ -15617,18 +15793,43 @@ var require_json = __commonJS({
     var JSON_SYNTAX_REGEXP = /#+/g;
     function json(options) {
       const normalizedOptions = normalizeOptions(options, "application/json");
-      var reviver = options?.reviver;
-      var strict = options?.strict !== false;
-      function parse(body) {
-        if (body.length === 0) {
-          return {};
-        }
-        if (strict) {
-          var first = firstchar(body);
+      const parse = createJsonParser(options);
+      const readOptions = {
+        ...normalizedOptions,
+        // assert charset per RFC 7159 sec 8.1
+        isValidCharset: (charset) => charset.slice(0, 4) === "utf-"
+      };
+      return function jsonParser(req, res, next) {
+        read(req, res, next, parse, debug, readOptions);
+      };
+    }
+    function createJsonParser(options) {
+      const reviver = options?.reviver;
+      const strict = options?.strict !== false;
+      if (strict) {
+        return function parse(body) {
+          if (body.length === 0) {
+            return {};
+          }
+          const first = firstchar(body);
           if (first !== "{" && first !== "[") {
             debug("strict violation");
             throw createStrictSyntaxError(body, first);
           }
+          try {
+            debug("parse json");
+            return JSON.parse(body, reviver);
+          } catch (e) {
+            throw normalizeJsonSyntaxError(e, {
+              message: e.message,
+              stack: e.stack
+            });
+          }
+        };
+      }
+      return function parse(body) {
+        if (body.length === 0) {
+          return {};
         }
         try {
           debug("parse json");
@@ -15639,19 +15840,11 @@ var require_json = __commonJS({
             stack: e.stack
           });
         }
-      }
-      const readOptions = {
-        ...normalizedOptions,
-        // assert charset per RFC 7159 sec 8.1
-        isValidCharset: (charset) => charset.slice(0, 4) === "utf-"
-      };
-      return function jsonParser(req, res, next) {
-        read(req, res, next, parse, debug, readOptions);
       };
     }
     function createStrictSyntaxError(str, char) {
-      var index = str.indexOf(char);
-      var partial = "";
+      const index = str.indexOf(char);
+      let partial = "";
       if (index !== -1) {
         partial = str.substring(0, index) + JSON_SYNTAX_CHAR.repeat(str.length - index);
       }
@@ -15668,13 +15861,13 @@ var require_json = __commonJS({
       }
     }
     function firstchar(str) {
-      var match = FIRST_CHAR_REGEXP.exec(str);
+      const match = FIRST_CHAR_REGEXP.exec(str);
       return match ? match[1] : void 0;
     }
     function normalizeJsonSyntaxError(error, obj) {
-      var keys = Object.getOwnPropertyNames(error);
-      for (var i = 0; i < keys.length; i++) {
-        var key = keys[i];
+      const keys = Object.getOwnPropertyNames(error);
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
         if (key !== "stack" && key !== "message") {
           delete error[key];
         }
@@ -17326,7 +17519,8 @@ var require_side_channel = __commonJS({
       var channel = {
         assert: function(key) {
           if (!channel.has(key)) {
-            throw new $TypeError("Side channel does not contain " + inspect(key));
+            var keyDesc = key && Object(key) === key ? "the given object key" : inspect(key);
+            throw new $TypeError("Side channel does not contain " + keyDesc);
           }
         },
         "delete": function(key) {
@@ -17382,6 +17576,7 @@ var require_utils2 = __commonJS({
     "use strict";
     var formats = require_formats();
     var getSideChannel = require_side_channel();
+    var defineProperty = require_es_define_property();
     var has = Object.prototype.hasOwnProperty;
     var isArray = Array.isArray;
     var overflowChannel = getSideChannel();
@@ -17429,6 +17624,18 @@ var require_utils2 = __commonJS({
       }
       return obj;
     };
+    var setProperty = function setProperty2(obj, key, value) {
+      if (key === "__proto__" && defineProperty) {
+        defineProperty(obj, key, {
+          configurable: true,
+          enumerable: true,
+          value,
+          writable: true
+        });
+      } else {
+        obj[key] = value;
+      }
+    };
     var merge = function merge2(target, source, options) {
       if (!source) {
         return target;
@@ -17436,7 +17643,10 @@ var require_utils2 = __commonJS({
       if (typeof source !== "object" && typeof source !== "function") {
         if (isArray(target)) {
           var nextIndex = target.length;
-          if (options && typeof options.arrayLimit === "number" && nextIndex > options.arrayLimit) {
+          if (options && typeof options.arrayLimit === "number" && nextIndex >= options.arrayLimit) {
+            if (options.throwOnLimitExceeded) {
+              throw new RangeError("Array limit exceeded. Only " + options.arrayLimit + " element" + (options.arrayLimit === 1 ? "" : "s") + " allowed in an array.");
+            }
             return markOverflow(arrayToObject(target.concat(source), options), nextIndex);
           }
           target[nextIndex] = source;
@@ -17467,6 +17677,9 @@ var require_utils2 = __commonJS({
         }
         var combined = [target].concat(source);
         if (options && typeof options.arrayLimit === "number" && combined.length > options.arrayLimit) {
+          if (options.throwOnLimitExceeded) {
+            throw new RangeError("Array limit exceeded. Only " + options.arrayLimit + " element" + (options.arrayLimit === 1 ? "" : "s") + " allowed in an array.");
+          }
           return markOverflow(arrayToObject(combined, options), combined.length - 1);
         }
         return combined;
@@ -17488,14 +17701,20 @@ var require_utils2 = __commonJS({
             target[i] = item;
           }
         });
+        if (options && typeof options.arrayLimit === "number" && target.length > options.arrayLimit) {
+          if (options.throwOnLimitExceeded) {
+            throw new RangeError("Array limit exceeded. Only " + options.arrayLimit + " element" + (options.arrayLimit === 1 ? "" : "s") + " allowed in an array.");
+          }
+          return markOverflow(arrayToObject(target, options), target.length - 1);
+        }
         return target;
       }
       return Object.keys(source).reduce(function(acc, key) {
         var value = source[key];
         if (has.call(acc, key)) {
-          acc[key] = merge2(acc[key], value, options);
+          setProperty(acc, key, merge2(acc[key], value, options));
         } else {
-          acc[key] = value;
+          setProperty(acc, key, value);
         }
         if (isOverflow(source) && !isOverflow(acc)) {
           markOverflow(acc, getMaxIndex(source));
@@ -17511,7 +17730,7 @@ var require_utils2 = __commonJS({
     };
     var assign = function assignSingleSource(target, source) {
       return Object.keys(source).reduce(function(acc, key) {
-        acc[key] = source[key];
+        setProperty(acc, key, source[key]);
         return acc;
       }, target);
     };
@@ -17545,6 +17764,13 @@ var require_utils2 = __commonJS({
       var out = "";
       for (var j = 0; j < string.length; j += limit) {
         var segment = string.length >= limit ? string.slice(j, j + limit) : string;
+        if (j + limit < string.length) {
+          var last = segment.charCodeAt(segment.length - 1);
+          if (last >= 55296 && last <= 56319) {
+            segment = segment.slice(0, -1);
+            j -= 1;
+          }
+        }
         var arr = [];
         for (var i = 0; i < segment.length; ++i) {
           var c = segment.charCodeAt(i);
@@ -17574,7 +17800,7 @@ var require_utils2 = __commonJS({
     };
     var compact = function compact2(value) {
       var queue = [{ obj: { o: value }, prop: "o" }];
-      var refs = [];
+      var refs = getSideChannel();
       for (var i = 0; i < queue.length; ++i) {
         var item = queue[i];
         var obj = item.obj[item.prop];
@@ -17582,9 +17808,9 @@ var require_utils2 = __commonJS({
         for (var j = 0; j < keys.length; ++j) {
           var key = keys[j];
           var val = obj[key];
-          if (typeof val === "object" && val !== null && refs.indexOf(val) === -1) {
+          if (typeof val === "object" && val !== null && !refs.has(val)) {
             queue[queue.length] = { obj, prop: key };
-            refs[refs.length] = val;
+            refs.set(val, true);
           }
         }
       }
@@ -17598,17 +17824,27 @@ var require_utils2 = __commonJS({
       if (!obj || typeof obj !== "object") {
         return false;
       }
-      return !!(obj.constructor && obj.constructor.isBuffer && obj.constructor.isBuffer(obj));
+      return !!(obj.constructor && typeof obj.constructor.isBuffer === "function" && obj.constructor.isBuffer(obj));
     };
-    var combine = function combine2(a, b, arrayLimit, plainObjects) {
+    var combine = function combine2(a, b, arrayLimit, plainObjects, throwOnLimitExceeded) {
       if (isOverflow(a)) {
-        var newIndex = getMaxIndex(a) + 1;
-        a[newIndex] = b;
+        if (throwOnLimitExceeded) {
+          throw new RangeError("Array limit exceeded. Only " + arrayLimit + " element" + (arrayLimit === 1 ? "" : "s") + " allowed in an array.");
+        }
+        var bValues = isArray(b) ? b : [b];
+        var newIndex = getMaxIndex(a);
+        for (var i = 0; i < bValues.length; ++i) {
+          newIndex += 1;
+          a[newIndex] = bValues[i];
+        }
         setMaxIndex(a, newIndex);
         return a;
       }
       var result = [].concat(a, b);
       if (result.length > arrayLimit) {
+        if (throwOnLimitExceeded) {
+          throw new RangeError("Array limit exceeded. Only " + arrayLimit + " element" + (arrayLimit === 1 ? "" : "s") + " allowed in an array.");
+        }
         return markOverflow(arrayToObject(result, { plainObjects }), result.length - 1);
       }
       return result;
@@ -17676,6 +17912,7 @@ var require_stringify = __commonJS({
       charsetSentinel: false,
       commaRoundTrip: false,
       delimiter: "&",
+      depth: Infinity,
       encode: true,
       encodeDotInKeys: false,
       encoder: utils.encode,
@@ -17695,8 +17932,11 @@ var require_stringify = __commonJS({
       return typeof v === "string" || typeof v === "number" || typeof v === "boolean" || typeof v === "symbol" || typeof v === "bigint";
     };
     var sentinel = {};
-    var stringify = function stringify2(object, prefix, generateArrayPrefix, commaRoundTrip, allowEmptyArrays, strictNullHandling, skipNulls, encodeDotInKeys, encoder, filter, sort, allowDots, serializeDate, format, formatter, encodeValuesOnly, charset, sideChannel) {
+    var stringify = function stringify2(object, prefix, generateArrayPrefix, commaRoundTrip, allowEmptyArrays, strictNullHandling, skipNulls, encodeDotInKeys, encoder, filter, sort, allowDots, serializeDate, format, formatter, encodeValuesOnly, charset, sideChannel, depth, currentDepth) {
       var obj = object;
+      if (currentDepth > depth) {
+        throw new RangeError("Input depth exceeded depth option of " + depth);
+      }
       var tmpSc = sideChannel;
       var step = 0;
       var findFlag = false;
@@ -17714,9 +17954,8 @@ var require_stringify = __commonJS({
           step = 0;
         }
       }
-      if (typeof filter === "function") {
-        obj = filter(prefix, obj);
-      } else if (obj instanceof Date) {
+      obj = typeof filter === "function" ? filter(prefix, obj) : obj;
+      if (obj instanceof Date) {
         obj = serializeDate(obj);
       } else if (generateArrayPrefix === "comma" && isArray(obj)) {
         obj = utils.maybeMap(obj, function(value2) {
@@ -17728,7 +17967,7 @@ var require_stringify = __commonJS({
       }
       if (obj === null) {
         if (strictNullHandling) {
-          return encoder && !encodeValuesOnly ? encoder(prefix, defaults2.encoder, charset, "key", format) : prefix;
+          return formatter(encoder && !encodeValuesOnly ? encoder(prefix, defaults2.encoder, charset, "key", format) : prefix);
         }
         obj = "";
       }
@@ -17746,7 +17985,9 @@ var require_stringify = __commonJS({
       var objKeys;
       if (generateArrayPrefix === "comma" && isArray(obj)) {
         if (encodeValuesOnly && encoder) {
-          obj = utils.maybeMap(obj, encoder);
+          obj = utils.maybeMap(obj, function(v) {
+            return v == null ? v : encoder(v);
+          });
         }
         objKeys = [{ value: obj.length > 0 ? obj.join(",") || null : void 0 }];
       } else if (isArray(filter)) {
@@ -17757,7 +17998,7 @@ var require_stringify = __commonJS({
       }
       var encodedPrefix = encodeDotInKeys ? String(prefix).replace(/\./g, "%2E") : String(prefix);
       var adjustedPrefix = commaRoundTrip && isArray(obj) && obj.length === 1 ? encodedPrefix + "[]" : encodedPrefix;
-      if (allowEmptyArrays && isArray(obj) && obj.length === 0) {
+      if (allowEmptyArrays && isArray(obj) && obj.length === 0 && Object.keys(obj).length === 0) {
         return adjustedPrefix + "[]";
       }
       for (var j = 0; j < objKeys.length; ++j) {
@@ -17789,7 +18030,9 @@ var require_stringify = __commonJS({
           formatter,
           encodeValuesOnly,
           charset,
-          valueSideChannel
+          valueSideChannel,
+          depth,
+          currentDepth + 1
         ));
       }
       return values;
@@ -17844,6 +18087,7 @@ var require_stringify = __commonJS({
         charsetSentinel: typeof opts.charsetSentinel === "boolean" ? opts.charsetSentinel : defaults2.charsetSentinel,
         commaRoundTrip: !!opts.commaRoundTrip,
         delimiter: typeof opts.delimiter === "undefined" ? defaults2.delimiter : opts.delimiter,
+        depth: typeof opts.depth === "number" ? opts.depth : defaults2.depth,
         encode: typeof opts.encode === "boolean" ? opts.encode : defaults2.encode,
         encodeDotInKeys: typeof opts.encodeDotInKeys === "boolean" ? opts.encodeDotInKeys : defaults2.encodeDotInKeys,
         encoder: typeof opts.encoder === "function" ? opts.encoder : defaults2.encoder,
@@ -17884,13 +18128,17 @@ var require_stringify = __commonJS({
       var sideChannel = getSideChannel();
       for (var i = 0; i < objKeys.length; ++i) {
         var key = objKeys[i];
+        if (typeof key === "undefined" || key === null) {
+          continue;
+        }
         var value = obj[key];
         if (options.skipNulls && value === null) {
           continue;
         }
+        var encodedKey = options.encodeDotInKeys ? String(key).replace(/\./g, "%2E") : String(key);
         pushToArray(keys, stringify(
           value,
-          key,
+          encodedKey,
           generateArrayPrefix,
           commaRoundTrip,
           options.allowEmptyArrays,
@@ -17906,16 +18154,18 @@ var require_stringify = __commonJS({
           options.formatter,
           options.encodeValuesOnly,
           options.charset,
-          sideChannel
+          sideChannel,
+          options.depth,
+          0
         ));
       }
       var joined = keys.join(options.delimiter);
       var prefix = options.addQueryPrefix === true ? "?" : "";
       if (options.charsetSentinel) {
         if (options.charset === "iso-8859-1") {
-          prefix += "utf8=%26%2310003%3B&";
+          prefix += "utf8=%26%2310003%3B" + options.delimiter;
         } else {
-          prefix += "utf8=%E2%9C%93&";
+          prefix += "utf8=%E2%9C%93" + options.delimiter;
         }
       }
       return joined.length > 0 ? prefix + joined : "";
@@ -17961,6 +18211,17 @@ var require_parse = __commonJS({
     };
     var parseArrayValue = function(val, options, currentArrayLength) {
       if (val && typeof val === "string" && options.comma && val.indexOf(",") > -1) {
+        if (options.throwOnLimitExceeded) {
+          var commaCount = 0;
+          var commaIndex = val.indexOf(",");
+          while (commaIndex > -1) {
+            commaCount += 1;
+            if (commaCount >= options.arrayLimit) {
+              throw new RangeError("Array limit exceeded. Only " + options.arrayLimit + " element" + (options.arrayLimit === 1 ? "" : "s") + " allowed in an array.");
+            }
+            commaIndex = val.indexOf(",", commaIndex + 1);
+          }
+        }
         return val.split(",");
       }
       if (options.throwOnLimitExceeded && currentArrayLength >= options.arrayLimit) {
@@ -18032,10 +18293,7 @@ var require_parse = __commonJS({
           val = isArray(val) ? [val] : val;
         }
         if (options.comma && isArray(val) && val.length > options.arrayLimit) {
-          if (options.throwOnLimitExceeded) {
-            throw new RangeError("Array limit exceeded. Only " + options.arrayLimit + " element" + (options.arrayLimit === 1 ? "" : "s") + " allowed in an array.");
-          }
-          val = utils.combine([], val, options.arrayLimit, options.plainObjects);
+          val = utils.combine([], val, options.arrayLimit, options.plainObjects, options.throwOnLimitExceeded);
         }
         if (key !== null) {
           var existing = has.call(obj, key);
@@ -18044,7 +18302,8 @@ var require_parse = __commonJS({
               obj[key],
               val,
               options.arrayLimit,
-              options.plainObjects
+              options.plainObjects,
+              options.throwOnLimitExceeded
             );
           } else if (!existing || options.duplicates === "last") {
             obj[key] = val;
@@ -18071,7 +18330,8 @@ var require_parse = __commonJS({
               [],
               leaf,
               options.arrayLimit,
-              options.plainObjects
+              options.plainObjects,
+              options.throwOnLimitExceeded
             );
           }
         } else {
@@ -18098,8 +18358,8 @@ var require_parse = __commonJS({
       }
       return leaf;
     };
-    var splitKeyIntoSegments = function splitKeyIntoSegments2(givenKey, options) {
-      var key = options.allowDots ? givenKey.replace(/\.([^.[]+)/g, "[$1]") : givenKey;
+    var splitKeyIntoSegments = function splitKeyIntoSegments2(originalKey, options) {
+      var key = options.allowDots ? originalKey.replace(/\.([^.[]+)/g, "[$1]") : originalKey;
       if (options.depth <= 0) {
         if (!options.plainObjects && has.call(Object.prototype, key)) {
           if (!options.allowPrototypes) {
@@ -18108,37 +18368,56 @@ var require_parse = __commonJS({
         }
         return [key];
       }
-      var brackets = /(\[[^[\]]*])/;
-      var child = /(\[[^[\]]*])/g;
-      var segment = brackets.exec(key);
-      var parent = segment ? key.slice(0, segment.index) : key;
-      var keys = [];
+      var segments = [];
+      var first = key.indexOf("[");
+      var parent = first >= 0 ? key.slice(0, first) : key;
       if (parent) {
         if (!options.plainObjects && has.call(Object.prototype, parent)) {
           if (!options.allowPrototypes) {
             return;
           }
         }
-        keys[keys.length] = parent;
+        segments[segments.length] = parent;
       }
-      var i = 0;
-      while ((segment = child.exec(key)) !== null && i < options.depth) {
-        i += 1;
-        var segmentContent = segment[1].slice(1, -1);
-        if (!options.plainObjects && has.call(Object.prototype, segmentContent)) {
-          if (!options.allowPrototypes) {
-            return;
+      var n = key.length;
+      var open = first;
+      var collected = 0;
+      while (open >= 0 && collected < options.depth) {
+        var level = 1;
+        var i = open + 1;
+        var close = -1;
+        while (i < n && close < 0) {
+          var cu = key.charCodeAt(i);
+          if (cu === 91) {
+            level += 1;
+          } else if (cu === 93) {
+            level -= 1;
+            if (level === 0) {
+              close = i;
+            }
           }
+          i += 1;
         }
-        keys[keys.length] = segment[1];
+        if (close < 0) {
+          segments[segments.length] = "[" + key.slice(open) + "]";
+          return segments;
+        }
+        var seg = key.slice(open, close + 1);
+        var content = seg.slice(1, -1);
+        if (!options.plainObjects && has.call(Object.prototype, content) && !options.allowPrototypes) {
+          return;
+        }
+        segments[segments.length] = seg;
+        collected += 1;
+        open = key.indexOf("[", close + 1);
       }
-      if (segment) {
+      if (open >= 0) {
         if (options.strictDepth === true) {
           throw new RangeError("Input depth exceeded depth option of " + options.depth + " and strictDepth is true");
         }
-        keys[keys.length] = "[" + key.slice(segment.index) + "]";
+        segments[segments.length] = "[" + key.slice(open) + "]";
       }
-      return keys;
+      return segments;
     };
     var parseKeys = function parseQueryStringKeys(givenKey, val, options, valuesParsed) {
       if (!givenKey) {
@@ -18252,10 +18531,7 @@ var require_urlencoded = __commonJS({
       if (normalizedOptions.defaultCharset !== "utf-8" && normalizedOptions.defaultCharset !== "iso-8859-1") {
         throw new TypeError("option defaultCharset must be either utf-8 or iso-8859-1");
       }
-      var queryparse = createQueryParser(options);
-      function parse(body, encoding) {
-        return body.length ? queryparse(body, encoding) : {};
-      }
+      const parse = createQueryParser(options);
       const readOptions = {
         ...normalizedOptions,
         // assert charset
@@ -18266,11 +18542,11 @@ var require_urlencoded = __commonJS({
       };
     }
     function createQueryParser(options) {
-      var extended = Boolean(options?.extended);
-      var parameterLimit = options?.parameterLimit !== void 0 ? options?.parameterLimit : 1e3;
-      var charsetSentinel = options?.charsetSentinel;
-      var interpretNumericEntities = options?.interpretNumericEntities;
-      var depth = extended ? options?.depth !== void 0 ? options?.depth : 32 : 0;
+      const extended = Boolean(options?.extended);
+      let parameterLimit = options?.parameterLimit !== void 0 ? options?.parameterLimit : 1e3;
+      const charsetSentinel = options?.charsetSentinel;
+      const interpretNumericEntities = options?.interpretNumericEntities;
+      const depth = extended ? options?.depth !== void 0 ? options?.depth : 32 : 0;
       if (isNaN(parameterLimit) || parameterLimit < 1) {
         throw new TypeError("option parameterLimit must be a positive number");
       }
@@ -18280,15 +18556,16 @@ var require_urlencoded = __commonJS({
       if (isFinite(parameterLimit)) {
         parameterLimit = parameterLimit | 0;
       }
-      return function queryparse(body, encoding) {
-        var paramCount = parameterCount(body, parameterLimit);
+      return function parse(body, encoding) {
+        if (!body.length) return {};
+        const paramCount = parameterCount(body, parameterLimit);
         if (paramCount === void 0) {
           debug("too many parameters");
           throw createError(413, "too many parameters", {
             type: "parameters.too.many"
           });
         }
-        var arrayLimit = extended ? Math.max(100, paramCount) : paramCount;
+        const arrayLimit = extended ? Math.max(100, paramCount) : paramCount;
         debug("parse " + (extended ? "extended " : "") + "urlencoding");
         try {
           return qs.parse(body, {
@@ -18330,26 +18607,10 @@ var require_body_parser = __commonJS({
   "node_modules/body-parser/index.js"(exports2, module2) {
     "use strict";
     exports2 = module2.exports = bodyParser;
-    Object.defineProperty(exports2, "json", {
-      configurable: true,
-      enumerable: true,
-      get: () => require_json()
-    });
-    Object.defineProperty(exports2, "raw", {
-      configurable: true,
-      enumerable: true,
-      get: () => require_raw()
-    });
-    Object.defineProperty(exports2, "text", {
-      configurable: true,
-      enumerable: true,
-      get: () => require_text()
-    });
-    Object.defineProperty(exports2, "urlencoded", {
-      configurable: true,
-      enumerable: true,
-      get: () => require_urlencoded()
-    });
+    exports2.json = require_json();
+    exports2.raw = require_raw();
+    exports2.text = require_text();
+    exports2.urlencoded = require_urlencoded();
     function bodyParser() {
       throw new Error("The bodyParser() generic has been split into individual middleware to use instead.");
     }
@@ -20042,6 +20303,110 @@ var require_view = __commonJS({
   }
 });
 
+// node_modules/content-type/index.js
+var require_content_type = __commonJS({
+  "node_modules/content-type/index.js"(exports2) {
+    "use strict";
+    var PARAM_REGEXP = /; *([!#$%&'*+.^_`|~0-9A-Za-z-]+) *= *("(?:[\u000b\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\u000b\u0020-\u00ff])*"|[!#$%&'*+.^_`|~0-9A-Za-z-]+) */g;
+    var TEXT_REGEXP = /^[\u000b\u0020-\u007e\u0080-\u00ff]+$/;
+    var TOKEN_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    var QESC_REGEXP = /\\([\u000b\u0020-\u00ff])/g;
+    var QUOTE_REGEXP = /([\\"])/g;
+    var TYPE_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+    exports2.format = format;
+    exports2.parse = parse;
+    function format(obj) {
+      if (!obj || typeof obj !== "object") {
+        throw new TypeError("argument obj is required");
+      }
+      var parameters = obj.parameters;
+      var type = obj.type;
+      if (!type || !TYPE_REGEXP.test(type)) {
+        throw new TypeError("invalid type");
+      }
+      var string = type;
+      if (parameters && typeof parameters === "object") {
+        var param;
+        var params = Object.keys(parameters).sort();
+        for (var i = 0; i < params.length; i++) {
+          param = params[i];
+          if (!TOKEN_REGEXP.test(param)) {
+            throw new TypeError("invalid parameter name");
+          }
+          string += "; " + param + "=" + qstring(parameters[param]);
+        }
+      }
+      return string;
+    }
+    function parse(string) {
+      if (!string) {
+        throw new TypeError("argument string is required");
+      }
+      var header = typeof string === "object" ? getcontenttype(string) : string;
+      if (typeof header !== "string") {
+        throw new TypeError("argument string is required to be a string");
+      }
+      var index = header.indexOf(";");
+      var type = index !== -1 ? header.slice(0, index).trim() : header.trim();
+      if (!TYPE_REGEXP.test(type)) {
+        throw new TypeError("invalid media type");
+      }
+      var obj = new ContentType(type.toLowerCase());
+      if (index !== -1) {
+        var key;
+        var match;
+        var value;
+        PARAM_REGEXP.lastIndex = index;
+        while (match = PARAM_REGEXP.exec(header)) {
+          if (match.index !== index) {
+            throw new TypeError("invalid parameter format");
+          }
+          index += match[0].length;
+          key = match[1].toLowerCase();
+          value = match[2];
+          if (value.charCodeAt(0) === 34) {
+            value = value.slice(1, -1);
+            if (value.indexOf("\\") !== -1) {
+              value = value.replace(QESC_REGEXP, "$1");
+            }
+          }
+          obj.parameters[key] = value;
+        }
+        if (index !== header.length) {
+          throw new TypeError("invalid parameter format");
+        }
+      }
+      return obj;
+    }
+    function getcontenttype(obj) {
+      var header;
+      if (typeof obj.getHeader === "function") {
+        header = obj.getHeader("content-type");
+      } else if (typeof obj.headers === "object") {
+        header = obj.headers && obj.headers["content-type"];
+      }
+      if (typeof header !== "string") {
+        throw new TypeError("content-type header is missing from object");
+      }
+      return header;
+    }
+    function qstring(val) {
+      var str = String(val);
+      if (TOKEN_REGEXP.test(str)) {
+        return str;
+      }
+      if (str.length > 0 && !TEXT_REGEXP.test(str)) {
+        throw new TypeError("invalid parameter value");
+      }
+      return '"' + str.replace(QUOTE_REGEXP, "\\$1") + '"';
+    }
+    function ContentType(type) {
+      this.parameters = /* @__PURE__ */ Object.create(null);
+      this.type = type;
+    }
+  }
+});
+
 // node_modules/etag/index.js
 var require_etag = __commonJS({
   "node_modules/etag/index.js"(exports2, module2) {
@@ -20867,6 +21232,9 @@ var require_proxy_addr = __commonJS({
       return function trust(addr) {
         if (!isip(addr)) return false;
         var ip = parseip(addr);
+        if (ip.kind() === "ipv6" && ip.isIPv4MappedAddress()) {
+          ip = ip.toIPv4Address();
+        }
         var ipconv;
         var kind = ip.kind();
         for (var i = 0; i < subnets.length; i++) {
@@ -20879,10 +21247,15 @@ var require_proxy_addr = __commonJS({
             if (subnetkind === "ipv4" && !ip.isIPv4MappedAddress()) {
               continue;
             }
+            if (subnetkind !== "ipv4" && !(subnetrange >= 96 && subnetip.isIPv4MappedAddress())) {
+              continue;
+            }
             if (!ipconv) {
               ipconv = subnetkind === "ipv4" ? ip.toIPv4Address() : ip.toIPv4MappedAddress();
             }
             trusted = ipconv;
+          } else if (kind === "ipv6" && subnetip.isIPv4MappedAddress()) {
+            continue;
           }
           if (trusted.match(subnetip, subnetrange)) {
             return true;
@@ -20899,12 +21272,20 @@ var require_proxy_addr = __commonJS({
       return function trust(addr) {
         if (!isip(addr)) return false;
         var ip = parseip(addr);
+        if (ip.kind() === "ipv6" && ip.isIPv4MappedAddress()) {
+          ip = ip.toIPv4Address();
+        }
         var kind = ip.kind();
         if (kind !== subnetkind) {
           if (subnetisipv4 && !ip.isIPv4MappedAddress()) {
             return false;
           }
+          if (!subnetisipv4 && !(subnetrange >= 96 && subnetip.isIPv4MappedAddress())) {
+            return false;
+          }
           ip = subnetisipv4 ? ip.toIPv4Address() : ip.toIPv4MappedAddress();
+        } else if (kind === "ipv6" && subnetip.isIPv4MappedAddress()) {
+          return false;
         }
         return ip.match(subnetip, subnetrange);
       };
@@ -21125,7 +21506,7 @@ var require_is_promise = __commonJS({
 });
 
 // node_modules/path-to-regexp/dist/index.js
-var require_dist = __commonJS({
+var require_dist3 = __commonJS({
   "node_modules/path-to-regexp/dist/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -22146,7 +22527,7 @@ var require_layer = __commonJS({
   "node_modules/router/lib/layer.js"(exports2, module2) {
     "use strict";
     var isPromise = require_is_promise();
-    var pathRegexp = require_dist();
+    var pathRegexp = require_dist3();
     var debug = require_src4()("router:layer");
     var deprecate = require_depd()("router");
     var TRAILING_SLASH_REGEXP = /\/+$/;
@@ -27479,6 +27860,93 @@ var require_src6 = __commonJS({
   }
 });
 
+// node_modules/destroy/index.js
+var require_destroy = __commonJS({
+  "node_modules/destroy/index.js"(exports2, module2) {
+    "use strict";
+    var EventEmitter = require("events").EventEmitter;
+    var ReadStream = require("fs").ReadStream;
+    var Stream = require("stream");
+    var Zlib = require("zlib");
+    module2.exports = destroy;
+    function destroy(stream, suppress) {
+      if (isFsReadStream(stream)) {
+        destroyReadStream(stream);
+      } else if (isZlibStream(stream)) {
+        destroyZlibStream(stream);
+      } else if (hasDestroy(stream)) {
+        stream.destroy();
+      }
+      if (isEventEmitter(stream) && suppress) {
+        stream.removeAllListeners("error");
+        stream.addListener("error", noop2);
+      }
+      return stream;
+    }
+    function destroyReadStream(stream) {
+      stream.destroy();
+      if (typeof stream.close === "function") {
+        stream.on("open", onOpenClose);
+      }
+    }
+    function closeZlibStream(stream) {
+      if (stream._hadError === true) {
+        var prop = stream._binding === null ? "_binding" : "_handle";
+        stream[prop] = {
+          close: function() {
+            this[prop] = null;
+          }
+        };
+      }
+      stream.close();
+    }
+    function destroyZlibStream(stream) {
+      if (typeof stream.destroy === "function") {
+        if (stream._binding) {
+          stream.destroy();
+          if (stream._processing) {
+            stream._needDrain = true;
+            stream.once("drain", onDrainClearBinding);
+          } else {
+            stream._binding.clear();
+          }
+        } else if (stream._destroy && stream._destroy !== Stream.Transform.prototype._destroy) {
+          stream.destroy();
+        } else if (stream._destroy && typeof stream.close === "function") {
+          stream.destroyed = true;
+          stream.close();
+        } else {
+          stream.destroy();
+        }
+      } else if (typeof stream.close === "function") {
+        closeZlibStream(stream);
+      }
+    }
+    function hasDestroy(stream) {
+      return stream instanceof Stream && typeof stream.destroy === "function";
+    }
+    function isEventEmitter(val) {
+      return val instanceof EventEmitter;
+    }
+    function isFsReadStream(stream) {
+      return stream instanceof ReadStream;
+    }
+    function isZlibStream(stream) {
+      return stream instanceof Zlib.Gzip || stream instanceof Zlib.Gunzip || stream instanceof Zlib.Deflate || stream instanceof Zlib.DeflateRaw || stream instanceof Zlib.Inflate || stream instanceof Zlib.InflateRaw || stream instanceof Zlib.Unzip;
+    }
+    function noop2() {
+    }
+    function onDrainClearBinding() {
+      this._binding.clear();
+    }
+    function onOpenClose() {
+      if (typeof this.fd === "number") {
+        this.close();
+      }
+    }
+  }
+});
+
 // node_modules/on-headers/index.js
 var require_on_headers = __commonJS({
   "node_modules/on-headers/index.js"(exports2, module2) {
@@ -27586,13 +28054,14 @@ var require_compression = __commonJS({
     var bytes = require_bytes();
     var compressible = require_compressible();
     var debug = require_src6()("compression");
+    var destroy = require_destroy();
     var onHeaders = require_on_headers();
     var vary = require_vary();
     var zlib = require("zlib");
     module2.exports = compression2;
     module2.exports.filter = shouldCompress;
     var hasBrotliSupport = "createBrotliCompress" in zlib;
-    var cacheControlNoTransformRegExp = /(?:^|,)\s*?no-transform\s*?(?:,|$)/;
+    var cacheControlNoTransformRegExp = /(?:^|,)\s*?no-transform\s*?(?:,|$)/i;
     var SUPPORTED_ENCODING = hasBrotliSupport ? ["br", "gzip", "deflate", "identity"] : ["gzip", "deflate", "identity"];
     var PREFERRED_ENCODING = hasBrotliSupport ? ["br", "gzip"] : ["gzip"];
     var encodingSupported = ["gzip", "deflate", "identity", "br"];
@@ -27616,6 +28085,7 @@ var require_compression = __commonJS({
         var length;
         var listeners = [];
         var stream;
+        var closed = false;
         var _end = res.end;
         var _on = res.on;
         var _write = res.write;
@@ -27664,6 +28134,10 @@ var require_compression = __commonJS({
           addListeners(res, _on, listeners);
           listeners = null;
         }
+        _on.call(res, "close", function onResponseClose() {
+          closed = true;
+          destroy(stream);
+        });
         onHeaders(res, function onResponseHeaders() {
           if (!filter(req, res)) {
             nocompress("filtered");
@@ -27698,6 +28172,11 @@ var require_compression = __commonJS({
           }
           debug("%s compression", method);
           stream = method === "gzip" ? zlib.createGzip(opts) : method === "br" ? zlib.createBrotliCompress(optsBrotli) : zlib.createDeflate(opts);
+          if (closed) {
+            destroy(stream);
+            stream = null;
+            return;
+          }
           addListeners(stream, stream.on, listeners);
           res.setHeader("Content-Encoding", method);
           res.removeHeader("Content-Length");
@@ -32099,7 +32578,7 @@ var require_BinaryWriter = __commonJS({
 });
 
 // node_modules/csharp-binary-stream/dist/index.js
-var require_dist2 = __commonJS({
+var require_dist4 = __commonJS({
   "node_modules/csharp-binary-stream/dist/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -60103,7 +60582,7 @@ var require_parser = __commonJS({
 });
 
 // node_modules/pg-protocol/dist/index.js
-var require_dist3 = __commonJS({
+var require_dist5 = __commonJS({
   "node_modules/pg-protocol/dist/index.js"(exports2) {
     "use strict";
     Object.defineProperty(exports2, "__esModule", { value: true });
@@ -60206,7 +60685,7 @@ var require_connection = __commonJS({
   "node_modules/pg/lib/connection.js"(exports2, module2) {
     "use strict";
     var EventEmitter = require("events").EventEmitter;
-    var { parse, serialize } = require_dist3();
+    var { parse, serialize } = require_dist5();
     var { getStream, getSecureStream } = require_stream();
     var flushBuffer = serialize.flush();
     var syncBuffer = serialize.sync();
@@ -62134,7 +62613,7 @@ var require_lib7 = __commonJS({
     var utils = require_utils6();
     var Pool2 = require_pg_pool();
     var TypeOverrides2 = require_type_overrides();
-    var { DatabaseError: DatabaseError2 } = require_dist3();
+    var { DatabaseError: DatabaseError2 } = require_dist5();
     var { escapeIdentifier: escapeIdentifier2, escapeLiteral: escapeLiteral2 } = require_utils6();
     var poolFactory = (Client3) => {
       return class BoundPool extends Pool2 {
@@ -62253,6 +62732,10 @@ var syncConfig = {
   initialBackfillStartBlock: 6525260,
   blockLogInterval: readNumber("PHANTASMA_SYNC_BLOCK_LOG_INTERVAL", 100),
   workerCount: readNumber("PHANTASMA_SYNC_WORKER_COUNT", 4),
+  peakWorkerCount: readNumber("PHANTASMA_SYNC_PEAK_WORKER_COUNT", 2),
+  peakHoursStartUtc: readNumber("PHANTASMA_SYNC_PEAK_HOURS_START_UTC", 12),
+  peakHoursEndUtc: readNumber("PHANTASMA_SYNC_PEAK_HOURS_END_UTC", 22),
+  interBlockDelayMs: readNumber("PHANTASMA_SYNC_INTER_BLOCK_DELAY_MS", 0),
   claimMaxAttempts: readNumber("PHANTASMA_SYNC_CLAIM_MAX_ATTEMPTS", 3),
   claimRetryBaseDelaySeconds: readNumber(
     "PHANTASMA_SYNC_CLAIM_RETRY_BASE_DELAY_SECONDS",
@@ -62272,6 +62755,14 @@ var apiConfig = {
   port: readNumber("PHANTASMA_API_PORT", 3e3),
   graphDefaultDepth: 1,
   graphHardMaxDepth: 2,
+  graphStageCoreEdgeLimit: readPositiveNumber(
+    "PHANTASMA_GRAPH_STAGE_CORE_EDGE_LIMIT",
+    300
+  ),
+  tokenGraphStageBaseEdgeLimit: readPositiveNumber(
+    "PHANTASMA_TOKEN_GRAPH_STAGE_BASE_EDGE_LIMIT",
+    600
+  ),
   graphMaxEdgesPerRequest: readNumber(
     "PHANTASMA_GRAPH_MAX_EDGES_PER_REQUEST",
     1200
@@ -62280,8 +62771,23 @@ var apiConfig = {
     "PHANTASMA_TOKEN_GRAPH_MAX_EDGES",
     1200
   ),
+  cacheServeStale: readBoolean("PHANTASMA_API_CACHE_SERVE_STALE", true),
+  cacheStaleMaxMs: readPositiveNumber(
+    "PHANTASMA_API_CACHE_STALE_MAX_MS",
+    3e5
+  ),
+  precomputeTtlMs: readPositiveNumber(
+    "PHANTASMA_API_PRECOMPUTE_TTL_MS",
+    18e4
+  ),
   transactionPageSizeDefault: readNumber("PHANTASMA_TX_PAGE_SIZE", 50),
-  transactionPageSizeMax: readNumber("PHANTASMA_TX_PAGE_SIZE_MAX", 250)
+  transactionPageSizeMax: readNumber("PHANTASMA_TX_PAGE_SIZE_MAX", 250),
+  priceSaturnxBaseUrl: process.env.PRICE_SATURNX_API_URL || "https://apiops.saturnx.cc/v1/tokens",
+  priceSaturnxNetwork: process.env.PRICE_SATURNX_NETWORK || "mainnet",
+  priceExplorerTokensUrl: process.env.PRICE_EXPLORER_TOKENS_API_URL || "https://api-explorer.phantasma.info/api/v1/tokens",
+  priceCoingeckoIds: process.env.PRICE_COINGECKO_IDS,
+  priceCacheTtlMs: readPositiveNumber("PRICE_CACHE_TTL_MS", 6e4),
+  priceStaleMaxMs: readPositiveNumber("PRICE_STALE_MAX_MS", 36e5)
 };
 var databaseConfig = {
   connectionString: process.env.DATABASE_URL,
@@ -63240,7 +63746,7 @@ function numberToByteArray(num, size) {
 }
 
 // node_modules/phantasma-sdk-ts/dist/esm/types/extensions/p-binary-reader.js
-var import_csharp_binary_stream = __toESM(require_dist2(), 1);
+var import_csharp_binary_stream = __toESM(require_dist4(), 1);
 
 // node_modules/phantasma-sdk-ts/dist/esm/interfaces/token.js
 var TokenFlags;
@@ -65782,7 +66288,7 @@ var PBinaryReader = class {
 };
 
 // node_modules/phantasma-sdk-ts/dist/esm/types/extensions/p-binary-writer.js
-var import_csharp_binary_stream2 = __toESM(require_dist2(), 1);
+var import_csharp_binary_stream2 = __toESM(require_dist4(), 1);
 var PBinaryWriter = class {
   constructor(arg1) {
     this.writer = arg1 === void 0 ? new import_csharp_binary_stream2.BinaryWriter() : new import_csharp_binary_stream2.BinaryWriter(arg1);
@@ -69761,6 +70267,15 @@ var defaults = import_lib.default.defaults;
 // src/phantasma.types.ts
 var CHAIN_SYNC_TOKEN = "__chain__";
 
+// src/labelingRubric.ts
+function isPathTerminalLabel(labelType, label) {
+  const normalizedType = String(labelType || "").trim().toLowerCase();
+  const normalizedLabel = String(label || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return [normalizedType, normalizedLabel].some(
+    (value) => value.includes("hub") || value === "receiver" || value.includes("high_inbound") || value.includes("high_outbound") || value === "inbound_activity" || value === "outbound_activity"
+  );
+}
+
 // src/database.ts
 var isApiProcess = process.argv.some(
   (arg) => /(^|[\\/])startApiServer(\.ts|\.js)?$/i.test(String(arg || ""))
@@ -70505,10 +71020,19 @@ async function getCachedApiResponse(cacheKey) {
     }
     const cacheRow = result.rows[0];
     const expiresAt = new Date(cacheRow.expires_at).getTime();
-    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    const now = Date.now();
+    const staleAgeMs = Number.isFinite(expiresAt) ? now - expiresAt : Infinity;
+    const canServeStale = apiConfig.cacheServeStale && Number.isFinite(staleAgeMs) && staleAgeMs >= 0 && staleAgeMs <= apiConfig.cacheStaleMaxMs;
+    if (!Number.isFinite(expiresAt)) {
       return {
         status: "stale",
         payload: null
+      };
+    }
+    if (now > expiresAt) {
+      return {
+        status: "stale",
+        payload: canServeStale ? cacheRow.payload : null
       };
     }
     const tokenSymbol = parseTokenSymbolFromCacheKey(cacheKey);
@@ -70529,7 +71053,7 @@ async function getCachedApiResponse(cacheKey) {
         if (Number.isFinite(mainUpdatedAt) && Number.isFinite(cacheUpdatedAt) && cacheUpdatedAt < mainUpdatedAt) {
           return {
             status: "stale",
-            payload: null
+            payload: apiConfig.cacheServeStale ? cacheRow.payload : null
           };
         }
       }
@@ -70599,63 +71123,79 @@ async function getAddressSubgraph(tokenSymbol, rootAddress, requestedDepth, requ
   const cacheKey = `${tokenSymbol}:${rootAddress}:${depth}:${edgeLimit}`;
   const cached = subgraphCacheGet(cacheKey);
   if (cached) return cached;
-  const edgesResult = await queryReadWithRetry(
+  const edgesResult = depth === 1 ? await queryReadWithRetry(
+    `SELECT id,
+                  token_symbol,
+                  from_address,
+                  to_address,
+                  amount,
+                  amount_normalized,
+                  tx_hash,
+                  event_index
+             FROM public.edges
+            WHERE token_symbol = $1
+              AND (from_address = $2 OR to_address = $2)
+            ORDER BY amount_normalized DESC, id ASC
+            LIMIT $3`,
+    [tokenSymbol, rootAddress, edgeLimit],
+    "get_address_subgraph_edges_depth1"
+  ) : await queryReadWithRetry(
     `WITH RECURSIVE walk AS (
-       SELECT $2::text AS address, 0 AS depth
-       UNION ALL
-       SELECT CASE
-                WHEN e.from_address = walk.address THEN e.to_address
-                ELSE e.from_address
-              END AS address,
-              walk.depth + 1 AS depth
-         FROM walk
-         JOIN public.edges e
-           ON e.token_symbol = $1
-          AND (e.from_address = walk.address OR e.to_address = walk.address)
-        WHERE walk.depth < $3
-     ),
-     address_depths AS (
-       SELECT address, MIN(depth) AS depth
-         FROM walk
-        GROUP BY address
-     ),
-     ranked_edges AS (
-       SELECT DISTINCT ON (e.tx_hash, e.event_index)
-              e.id,
-              e.token_symbol,
-              e.from_address,
-              e.to_address,
-              e.amount,
-              e.amount_normalized,
-              e.tx_hash,
-              e.event_index,
-              LEAST(from_depth.depth, to_depth.depth) AS edge_depth
-         FROM public.edges e
-         JOIN address_depths from_depth
-           ON from_depth.address = e.from_address
-         JOIN address_depths to_depth
-           ON to_depth.address = e.to_address
-        WHERE e.token_symbol = $1
-        ORDER BY e.tx_hash,
-                 e.event_index,
-                 LEAST(from_depth.depth, to_depth.depth),
-                 e.id
-     ),
-     limited_edges AS (
-       SELECT id,
-              token_symbol,
-              from_address,
-              to_address,
-              amount,
-              amount_normalized,
-              tx_hash,
-              event_index
-         FROM ranked_edges
-        ORDER BY edge_depth ASC, id ASC
-        LIMIT $4
-     )
-     SELECT * FROM limited_edges
-     ORDER BY id ASC`,
+             SELECT $2::text AS address, 0 AS depth
+             UNION ALL
+             SELECT CASE
+                      WHEN e.from_address = walk.address THEN e.to_address
+                      ELSE e.from_address
+                    END AS address,
+                    walk.depth + 1 AS depth
+               FROM walk
+               JOIN public.edges e
+                 ON e.token_symbol = $1
+                AND (e.from_address = walk.address OR e.to_address = walk.address)
+              WHERE walk.depth < $3
+           ),
+           address_depths AS (
+             SELECT address, MIN(depth) AS depth
+               FROM walk
+              GROUP BY address
+           ),
+           ranked_edges AS (
+             SELECT DISTINCT ON (e.tx_hash, e.event_index)
+                    e.id,
+                    e.token_symbol,
+                    e.from_address,
+                    e.to_address,
+                    e.amount,
+                    e.amount_normalized,
+                    e.tx_hash,
+                    e.event_index,
+                    LEAST(from_depth.depth, to_depth.depth) AS edge_depth
+               FROM public.edges e
+               JOIN address_depths from_depth
+                 ON from_depth.address = e.from_address
+               JOIN address_depths to_depth
+                 ON to_depth.address = e.to_address
+              WHERE e.token_symbol = $1
+              ORDER BY e.tx_hash,
+                       e.event_index,
+                       LEAST(from_depth.depth, to_depth.depth),
+                       e.id
+           ),
+           limited_edges AS (
+             SELECT id,
+                    token_symbol,
+                    from_address,
+                    to_address,
+                    amount,
+                    amount_normalized,
+                    tx_hash,
+                    event_index
+               FROM ranked_edges
+              ORDER BY edge_depth ASC, id ASC
+              LIMIT $4
+           )
+           SELECT * FROM limited_edges
+           ORDER BY id ASC`,
     [tokenSymbol, rootAddress, depth, edgeLimit],
     "get_address_subgraph_edges"
   );
@@ -70953,12 +71493,7 @@ async function findAddressPaths(options) {
     terminalLabelRows.rows.forEach((row) => {
       const address = String(row.address || "").trim();
       if (!address) return;
-      const labelType = String(row.label_type || "").trim().toLowerCase();
-      const label = String(row.label || "").trim().toLowerCase();
-      const isHub = labelType.includes("hub") || label.includes("hub");
-      const isHighInbound = labelType.includes("high_inbound") || labelType.includes("high inbound") || label.includes("high_inbound") || label.includes("high inbound");
-      const isHighOutbound = labelType.includes("high_outbound") || labelType.includes("high outbound") || label.includes("high_outbound") || label.includes("high outbound");
-      if (isHub || isHighInbound || isHighOutbound) {
+      if (isPathTerminalLabel(row.label_type, row.label)) {
         terminalAddressSet.add(address);
       }
     });
@@ -71267,7 +71802,15 @@ async function refreshTokenAnalyticsForDate(tokenSymbol, bucketDate = /* @__PURE
        FROM balance_ledger bl
        LEFT JOIN token_metadata tm
          ON tm.token_symbol = $1
-       WHERE COALESCE(bl.balance_normalized, 0::numeric) > 0::numeric`,
+       WHERE COALESCE(bl.balance_normalized, 0::numeric) > 0::numeric
+       ON CONFLICT (token_symbol, address, bucket_date) DO UPDATE
+         SET balance = EXCLUDED.balance,
+             balance_normalized = EXCLUDED.balance_normalized,
+             share_of_supply = EXCLUDED.share_of_supply,
+             wallet_type = EXCLUDED.wallet_type,
+             first_seen_at = EXCLUDED.first_seen_at,
+             last_seen_at = EXCLUDED.last_seen_at,
+             updated_at = NOW()`,
       [tokenSymbol, normalizedBucketDate]
     );
     await client.query(
@@ -71340,7 +71883,16 @@ async function refreshTokenAnalyticsForDate(tokenSymbol, bucketDate = /* @__PURE
          NOW(),
          NOW()
        FROM expanded
-       GROUP BY token_symbol, address`,
+       GROUP BY token_symbol, address
+       ON CONFLICT (token_symbol, address, bucket_date) DO UPDATE
+         SET incoming_tx_count = EXCLUDED.incoming_tx_count,
+             outgoing_tx_count = EXCLUDED.outgoing_tx_count,
+             incoming_volume = EXCLUDED.incoming_volume,
+             outgoing_volume = EXCLUDED.outgoing_volume,
+             net_flow = EXCLUDED.net_flow,
+             counterparty_count = EXCLUDED.counterparty_count,
+             last_tx_at = EXCLUDED.last_tx_at,
+             updated_at = NOW()`,
       [tokenSymbol, normalizedBucketDate]
     );
     await client.query(
@@ -71598,6 +72150,101 @@ async function getTokenTopMovers(tokenSymbol, windowDays, limit) {
   );
   return result.rows.map(mapTokenTopMoverRow);
 }
+async function getPrecomputedApiView(viewKey) {
+  const result = await queryReadWithRetry(
+    `SELECT payload
+       FROM public.api_precomputed_views
+      WHERE view_key = $1
+        AND expires_at > NOW()
+      LIMIT 1`,
+    [viewKey],
+    "get_precomputed_api_view"
+  );
+  if (result.rowCount === 0) {
+    return null;
+  }
+  return result.rows[0]?.payload ?? null;
+}
+async function setPrecomputedApiView(options) {
+  const ttlMs = Math.max(
+    1e3,
+    Math.floor(Number(options.ttlMs ?? apiConfig.precomputeTtlMs) || 0)
+  );
+  await databasePool.query(
+    `INSERT INTO public.api_precomputed_views (
+       view_key,
+       token_symbol,
+       payload,
+       expires_at,
+       updated_at
+     ) VALUES (
+       $1,
+       $2,
+       $3::jsonb,
+       NOW() + (($4::bigint) * INTERVAL '1 millisecond'),
+       NOW()
+     )
+     ON CONFLICT (view_key) DO UPDATE
+       SET token_symbol = EXCLUDED.token_symbol,
+           payload = EXCLUDED.payload,
+           expires_at = EXCLUDED.expires_at,
+           updated_at = NOW()`,
+    [
+      options.viewKey,
+      options.tokenSymbol ?? null,
+      JSON.stringify(options.payload),
+      ttlMs
+    ]
+  );
+}
+async function refreshTokenPrecomputedViews(tokenSymbol) {
+  const [metadata, graphBase, topHolders, timeseries30] = await Promise.all([
+    getTokenMetadata(tokenSymbol),
+    getFullTokenGraph(tokenSymbol, {
+      includeTopHoldersLimit: 0,
+      edgeLimit: Math.min(
+        apiConfig.tokenGraphMaxEdges,
+        apiConfig.tokenGraphStageBaseEdgeLimit
+      )
+    }),
+    getTopHolders(tokenSymbol, 25),
+    getTokenDailyMetrics(tokenSymbol, 30)
+  ]);
+  const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  const basePayload = {
+    tokenSymbol,
+    generatedAt,
+    metadata,
+    graphBase,
+    topHolders,
+    timeseries30
+  };
+  await Promise.all([
+    setPrecomputedApiView({
+      viewKey: `token-overview:${tokenSymbol}`,
+      tokenSymbol,
+      payload: basePayload
+    }),
+    setPrecomputedApiView({
+      viewKey: `token-graph-base:${tokenSymbol}`,
+      tokenSymbol,
+      payload: {
+        tokenSymbol,
+        generatedAt,
+        graph: graphBase
+      }
+    }),
+    setPrecomputedApiView({
+      viewKey: `token-top-holders:${tokenSymbol}:25`,
+      tokenSymbol,
+      payload: {
+        tokenSymbol,
+        generatedAt,
+        topHolders
+      }
+    })
+  ]);
+}
 
 // src/responseCache.ts
 var SimpleCache = class {
@@ -71653,9 +72300,16 @@ function cacheMiddleware(cacheKey, ttlMs) {
       databaseCached = null;
       databaseLookupStatus = "miss";
     }
-    if (databaseCached) {
+    if (databaseLookupStatus === "hit" && databaseCached) {
       responseCache.set(cacheKey, databaseCached, ttlMs);
       response.setHeader("X-Cache", "HIT");
+      response.json(JSON.parse(databaseCached));
+      return;
+    }
+    if (databaseLookupStatus === "stale" && databaseCached && apiConfig.cacheServeStale) {
+      const staleTtlMs = Math.max(1e3, Math.min(5e3, ttlMs));
+      responseCache.set(cacheKey, databaseCached, staleTtlMs);
+      response.setHeader("X-Cache", "STALE");
       response.json(JSON.parse(databaseCached));
       return;
     }
@@ -71674,7 +72328,7 @@ function cacheMiddleware(cacheKey, ttlMs) {
     };
     response.setHeader(
       "X-Cache",
-      databaseLookupStatus === "stale" ? "STALE" : "MISS"
+      databaseLookupStatus === "stale" ? "STALE-MISS" : "MISS"
     );
     next();
   };
@@ -71685,6 +72339,208 @@ function invalidateCache(pattern) {
     void clearApiQueryCache().catch(() => {
     });
   }
+}
+
+// src/priceService.ts
+var DEFAULT_COINGECKO_IDS = {
+  SOUL: "phantasma",
+  KCAL: "phantasma-energy"
+};
+function toFiniteNumber(value) {
+  if (value === null || value === void 0 || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+function asRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function readSymbol(candidate) {
+  return String(
+    candidate.symbol ?? candidate.tokenSymbol ?? candidate.token_symbol ?? candidate.token ?? ""
+  ).trim().toUpperCase();
+}
+function parseSaturnxQuote(payload, tokenSymbol) {
+  const symbol = tokenSymbol.toUpperCase();
+  const root = asRecord(payload);
+  if (!root) return null;
+  const data = root.data;
+  const collection = root.tokens ?? root.prices ?? root.quotes ?? asRecord(data)?.tokens ?? data;
+  let candidates = [];
+  if (asRecord(data) && !Array.isArray(collection)) {
+    candidates = [asRecord(data)];
+  } else if (Array.isArray(collection)) {
+    candidates = collection.map(asRecord).filter(Boolean);
+  } else if (root.price !== void 0 || root.priceUsd !== void 0) {
+    candidates = [root];
+  }
+  const token = candidates.find((candidate) => {
+    const candidateSymbol = readSymbol(candidate);
+    return candidateSymbol === symbol || !candidateSymbol && candidates.length === 1;
+  });
+  if (!token) return null;
+  const priceUsd = toFiniteNumber(
+    token.priceUsd ?? token.price_usd ?? token.usdPrice ?? token.usd_price ?? token.currentPrice ?? token.current_price ?? (asRecord(token.price)?.usd ?? token.price) ?? token.usd
+  );
+  if (priceUsd === null || priceUsd < 0) return null;
+  const change = asRecord(token.change);
+  return {
+    priceUsd,
+    priceChange24h: toFiniteNumber(
+      token.priceChange24h ?? token.price_change_24h ?? token.change24h ?? token.change_24h ?? token.changePercent24h ?? token.change_percent_24h ?? change?.h24 ?? change?.h24Percent
+    )
+  };
+}
+function parseExplorerQuote(payload, tokenSymbol) {
+  const root = asRecord(payload);
+  const tokens = Array.isArray(root?.tokens) ? root.tokens : Array.isArray(payload) ? payload : [];
+  const token = tokens.map(asRecord).find(
+    (candidate) => candidate && readSymbol(candidate) === tokenSymbol.toUpperCase()
+  );
+  if (!token) return null;
+  const priceUsd = toFiniteNumber(asRecord(token.price)?.usd ?? token.price);
+  if (priceUsd === null || priceUsd < 0) return null;
+  return { priceUsd, priceChange24h: null };
+}
+function parseCoinGeckoQuote(payload, coingeckoId) {
+  const entry = asRecord(asRecord(payload)?.[coingeckoId]);
+  if (!entry) return null;
+  const priceUsd = toFiniteNumber(entry.usd);
+  if (priceUsd === null || priceUsd < 0) return null;
+  return { priceUsd, priceChange24h: toFiniteNumber(entry.usd_24h_change) };
+}
+function parseCoinGeckoIds(rawValue) {
+  if (!rawValue || !rawValue.trim()) return { ...DEFAULT_COINGECKO_IDS };
+  const ids = {};
+  for (const pair of rawValue.split(",")) {
+    const [symbol, id] = pair.split(":").map((part) => part.trim());
+    if (symbol && id) ids[symbol.toUpperCase()] = id;
+  }
+  return ids;
+}
+function createTokenPriceService(options = {}) {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const saturnxBaseUrl = (options.saturnxBaseUrl ?? "https://apiops.saturnx.cc/v1/tokens").replace(/\/$/, "");
+  const saturnxNetwork = options.saturnxNetwork ?? "mainnet";
+  const explorerTokensUrl = (options.explorerTokensUrl ?? "https://api-explorer.phantasma.info/api/v1/tokens").replace(/\/$/, "");
+  const coingeckoSimplePriceUrl = options.coingeckoSimplePriceUrl ?? "https://api.coingecko.com/api/v3/simple/price";
+  const coingeckoIds = options.coingeckoIds ?? DEFAULT_COINGECKO_IDS;
+  const freshTtlMs = options.freshTtlMs ?? 6e4;
+  const failureTtlMs = options.failureTtlMs ?? 3e4;
+  const staleMaxMs = options.staleMaxMs ?? 60 * 6e4;
+  const requestTimeoutMs2 = options.requestTimeoutMs ?? 6e3;
+  const maxCacheEntries = options.maxCacheEntries ?? 500;
+  const now = options.now ?? Date.now;
+  const cache = /* @__PURE__ */ new Map();
+  const inFlight = /* @__PURE__ */ new Map();
+  async function fetchJson(url) {
+    const response = await fetchImpl(url, {
+      signal: AbortSignal.timeout(requestTimeoutMs2),
+      headers: { accept: "application/json" }
+    });
+    if (!response.ok) {
+      throw new Error(`Price source responded with ${response.status}`);
+    }
+    return response.json();
+  }
+  async function fetchSources(symbol) {
+    const coingeckoId = coingeckoIds[symbol];
+    const tasks = [
+      {
+        source: "saturnx",
+        run: async () => parseSaturnxQuote(
+          await fetchJson(
+            `${saturnxBaseUrl}/${encodeURIComponent(symbol)}?network=${encodeURIComponent(saturnxNetwork)}`
+          ),
+          symbol
+        )
+      }
+    ];
+    if (coingeckoId) {
+      tasks.push({
+        source: "coingecko",
+        run: async () => parseCoinGeckoQuote(
+          await fetchJson(
+            `${coingeckoSimplePriceUrl}?ids=${encodeURIComponent(coingeckoId)}&vs_currencies=usd&include_24hr_change=true`
+          ),
+          coingeckoId
+        )
+      });
+    }
+    tasks.push({
+      source: "phantasma-explorer",
+      run: async () => parseExplorerQuote(
+        await fetchJson(
+          `${explorerTokensUrl}?symbol=${encodeURIComponent(symbol)}&with_price=1`
+        ),
+        symbol
+      )
+    });
+    const settled = await Promise.allSettled(tasks.map((task) => task.run()));
+    return tasks.map((task, index) => {
+      const outcome = settled[index];
+      return {
+        source: task.source,
+        quote: outcome.status === "fulfilled" ? outcome.value : null
+      };
+    });
+  }
+  async function refresh(symbol) {
+    const results = await fetchSources(symbol);
+    const winner = results.find((result) => result.quote);
+    const fetchedAtMs = now();
+    const fetchedAt = new Date(fetchedAtMs).toISOString();
+    const previous = cache.get(symbol);
+    let quote;
+    if (winner?.quote) {
+      const changeFromOther = results.find(
+        (result) => result.quote && result.quote.priceChange24h !== null
+      )?.quote?.priceChange24h;
+      quote = {
+        tokenSymbol: symbol,
+        priceUsd: winner.quote.priceUsd,
+        priceChange24h: winner.quote.priceChange24h ?? changeFromOther ?? null,
+        source: winner.source,
+        fetchedAt,
+        stale: false
+      };
+    } else if (previous?.lastGood && fetchedAtMs - previous.lastGoodAt <= staleMaxMs) {
+      quote = { ...previous.lastGood, stale: true };
+    } else {
+      quote = {
+        tokenSymbol: symbol,
+        priceUsd: null,
+        priceChange24h: null,
+        source: null,
+        fetchedAt,
+        stale: false
+      };
+    }
+    const succeeded = Boolean(winner?.quote);
+    cache.delete(symbol);
+    cache.set(symbol, {
+      quote,
+      expiresAt: fetchedAtMs + (succeeded ? freshTtlMs : failureTtlMs),
+      lastGood: succeeded ? quote : previous?.lastGood ?? null,
+      lastGoodAt: succeeded ? fetchedAtMs : previous?.lastGoodAt ?? 0
+    });
+    while (cache.size > maxCacheEntries) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey === void 0) break;
+      cache.delete(oldestKey);
+    }
+    return quote;
+  }
+  async function getQuote(tokenSymbol) {
+    const symbol = tokenSymbol.trim().toUpperCase();
+    const cached = cache.get(symbol);
+    if (cached && cached.expiresAt > now()) return cached.quote;
+    const pending = inFlight.get(symbol);
+    if (pending) return pending;
+    const request = refresh(symbol).finally(() => inFlight.delete(symbol));
+    inFlight.set(symbol, request);
+    return request;
+  }
+  return { getQuote, clear: () => cache.clear() };
 }
 
 // src/apiServer.ts
@@ -71701,6 +72557,14 @@ var ApiError = class extends Error {
     this.retryAfterMs = retryAfterMs;
   }
 };
+var tokenPriceService = createTokenPriceService({
+  saturnxBaseUrl: apiConfig.priceSaturnxBaseUrl,
+  saturnxNetwork: apiConfig.priceSaturnxNetwork,
+  explorerTokensUrl: apiConfig.priceExplorerTokensUrl,
+  coingeckoIds: parseCoinGeckoIds(apiConfig.priceCoingeckoIds),
+  freshTtlMs: apiConfig.priceCacheTtlMs,
+  staleMaxMs: apiConfig.priceStaleMaxMs
+});
 var defaultDeps = {
   rpcClient: createPhantasmaRpcClient(),
   cacheMiddlewareImpl: cacheMiddleware,
@@ -71714,6 +72578,8 @@ var defaultDeps = {
   getTokenMetadataImpl: getTokenMetadata,
   getAddressSubgraphImpl: getAddressSubgraph,
   getAddressConnectionsImpl: getAddressConnections,
+  getPrecomputedApiViewImpl: getPrecomputedApiView,
+  refreshTokenPrecomputedViewsImpl: refreshTokenPrecomputedViews,
   findAddressPathsImpl: findAddressPaths,
   getTopHoldersImpl: getTopHolders,
   getFullTokenGraphImpl: getFullTokenGraph,
@@ -71722,7 +72588,8 @@ var defaultDeps = {
   refreshTokenAnalyticsForDateImpl: refreshTokenAnalyticsForDate,
   getTokenDailyMetricsImpl: getTokenDailyMetrics,
   getTokenTopMoversImpl: getTokenTopMovers,
-  getLabeledNodesImpl: getLabeledNodes
+  getLabeledNodesImpl: getLabeledNodes,
+  getTokenPriceImpl: tokenPriceService.getQuote
 };
 function readPositiveInt(value, fallback) {
   if (!value) {
@@ -71894,12 +72761,41 @@ function sendSuccess(request, response, data, meta = {}, status = 200) {
     requestId
   };
   const etag = createEtagFromData(body.data);
+  response.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
   response.setHeader("ETag", etag);
   if (request.headers["if-none-match"] === etag) {
     response.status(304).end();
     return;
   }
   response.status(status).json(body);
+}
+function normalizeAddressGraphStage(request) {
+  const raw = String(request.query.stage ?? "core").trim().toLowerCase();
+  if (raw === "core" || raw === "connections" || raw === "full") {
+    return raw;
+  }
+  throw new ApiError(
+    400,
+    "INVALID_REQUEST",
+    "stage must be core, connections, or full",
+    {
+      received: raw || null
+    }
+  );
+}
+function normalizeTokenGraphStage(request) {
+  const raw = String(request.query.stage ?? "base").trim().toLowerCase();
+  if (raw === "base" || raw === "holders" || raw === "full") {
+    return raw;
+  }
+  throw new ApiError(
+    400,
+    "INVALID_REQUEST",
+    "stage must be base, holders, or full",
+    {
+      received: raw || null
+    }
+  );
 }
 function sendError(response, status, code, message, details, retryAfterMs) {
   const requestId = response.locals.requestId;
@@ -71975,6 +72871,37 @@ function buildAddressConnectionsCacheKey(request) {
   const tokenSymbol = normalizeTokenQueryForCache(request);
   const address = normalizeAddressPathForCache(request);
   return `address-connections:${tokenSymbol}:${address}`;
+}
+function buildAddressStagedCacheKey(request) {
+  const tokenSymbol = normalizeTokenQueryForCache(request);
+  const address = normalizeAddressPathForCache(request);
+  const stage = String(request.query.stage ?? "core").trim().toLowerCase();
+  const depth = readPositiveInt(
+    String(request.query.depth ?? ""),
+    apiConfig.graphDefaultDepth
+  );
+  const edgeLimit = readPositiveInt(
+    String(request.query.edgeLimit ?? ""),
+    apiConfig.graphMaxEdgesPerRequest
+  );
+  const connectionsLimit = readPositiveInt(
+    String(request.query.connectionsLimit ?? ""),
+    25
+  );
+  return `address-staged:${tokenSymbol}:${address}:${stage}:${depth}:${edgeLimit}:${connectionsLimit}`;
+}
+function buildTokenStagedCacheKey(request) {
+  const tokenSymbol = String(request.params.tokenSymbol ?? "").trim().toUpperCase();
+  const stage = String(request.query.stage ?? "base").trim().toLowerCase();
+  const edgeLimit = readPositiveInt(
+    String(request.query.edgeLimit ?? ""),
+    apiConfig.tokenGraphStageBaseEdgeLimit
+  );
+  const topHoldersLimit = readPositiveInt(
+    String(request.query.topHoldersLimit ?? ""),
+    10
+  );
+  return `token-staged:${tokenSymbol}:${stage}:${edgeLimit}:${topHoldersLimit}`;
 }
 function buildTracePathsCacheKey(request) {
   const tokenSymbol = normalizeTokenQueryForCache(request);
@@ -72080,6 +73007,7 @@ async function sendTokenGraphResponse(request, response, deps, tokenSymbol, incl
 }
 function createApiApp(deps = defaultDeps) {
   const app = (0, import_express.default)();
+  app.disable("x-powered-by");
   const allowedOrigins = String(process.env.PHANTASMA_API_CORS_ORIGINS ?? "").split(",").map((origin) => origin.trim()).filter(Boolean);
   app.use(
     (0, import_cors.default)({
@@ -72089,7 +73017,9 @@ function createApiApp(deps = defaultDeps) {
   app.use(
     (0, import_compression.default)({
       // Only compress responses larger than 1KB; small payloads have negligible gain
-      threshold: 1024
+      threshold: 1024,
+      level: 6,
+      memLevel: 8
     })
   );
   app.use(import_express.default.json());
@@ -72210,6 +73140,134 @@ function createApiApp(deps = defaultDeps) {
           );
         }
         sendSuccess(request, response, metadata);
+      } catch (error) {
+        handleRouteError(response, error);
+      }
+    }
+  );
+  app.get(
+    "/graph/address/:address/staged",
+    (request, response, next) => {
+      const cacheKey = buildAddressStagedCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1e3)(
+        request,
+        response,
+        next
+      );
+    },
+    async (request, response) => {
+      try {
+        const tokenSymbol = String(request.query.token ?? "").trim();
+        const address = String(request.params.address).trim();
+        const stage = normalizeAddressGraphStage(request);
+        if (!tokenSymbol) {
+          throw new ApiError(
+            400,
+            "INVALID_REQUEST",
+            "token query parameter is required",
+            {
+              query: "token"
+            }
+          );
+        }
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "token query parameter is invalid",
+            {
+              tokenSymbol
+            }
+          );
+        }
+        if (!isValidAddress(address)) {
+          throw new ApiError(
+            400,
+            "ADDRESS_INVALID",
+            "address path parameter is invalid",
+            {
+              address
+            }
+          );
+        }
+        const requestedDepth = readPositiveInt(
+          String(request.query.depth ?? ""),
+          apiConfig.graphDefaultDepth
+        );
+        if (requestedDepth > apiConfig.graphHardMaxDepth) {
+          throw new ApiError(
+            400,
+            "GRAPH_DEPTH_LIMIT_EXCEEDED",
+            `depth must be <= ${apiConfig.graphHardMaxDepth}`,
+            { received: requestedDepth, max: apiConfig.graphHardMaxDepth }
+          );
+        }
+        const requestedEdgeLimit = readPositiveInt(
+          String(request.query.edgeLimit ?? ""),
+          apiConfig.graphMaxEdgesPerRequest
+        );
+        if (requestedEdgeLimit > apiConfig.graphMaxEdgesPerRequest) {
+          throw new ApiError(
+            400,
+            "GRAPH_EDGE_LIMIT_EXCEEDED",
+            `edgeLimit must be <= ${apiConfig.graphMaxEdgesPerRequest}`,
+            {
+              received: requestedEdgeLimit,
+              max: apiConfig.graphMaxEdgesPerRequest
+            }
+          );
+        }
+        const coreEdgeLimit = Math.min(
+          requestedEdgeLimit,
+          apiConfig.graphStageCoreEdgeLimit
+        );
+        const coreGraph = await deps.getAddressSubgraphImpl(
+          tokenSymbol,
+          address,
+          1,
+          coreEdgeLimit
+        );
+        if (stage === "core") {
+          sendSuccess(request, response, {
+            tokenSymbol,
+            address,
+            stage,
+            core: coreGraph,
+            nextStage: "connections"
+          });
+          return;
+        }
+        const connectionsLimit = clampInt(
+          readPositiveInt(String(request.query.connectionsLimit ?? ""), 25),
+          1,
+          200
+        );
+        const connections = (await deps.getAddressConnectionsImpl(tokenSymbol, address)).slice(0, connectionsLimit);
+        if (stage === "connections") {
+          sendSuccess(request, response, {
+            tokenSymbol,
+            address,
+            stage,
+            core: coreGraph,
+            connections,
+            nextStage: "full"
+          });
+          return;
+        }
+        const fullGraph = await deps.getAddressSubgraphImpl(
+          tokenSymbol,
+          address,
+          requestedDepth,
+          requestedEdgeLimit
+        );
+        sendSuccess(request, response, {
+          tokenSymbol,
+          address,
+          stage,
+          core: coreGraph,
+          connections,
+          full: fullGraph
+        });
       } catch (error) {
         handleRouteError(response, error);
       }
@@ -72472,6 +73530,86 @@ function createApiApp(deps = defaultDeps) {
           Math.min(limit, 100)
         );
         sendSuccess(request, response, result);
+      } catch (error) {
+        handleRouteError(response, error);
+      }
+    }
+  );
+  app.get(
+    "/graph/token/:tokenSymbol/staged",
+    (request, response, next) => {
+      const cacheKey = buildTokenStagedCacheKey(request);
+      deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1e3)(
+        request,
+        response,
+        next
+      );
+    },
+    async (request, response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol }
+          );
+        }
+        const stage = normalizeTokenGraphStage(request);
+        const baseEdgeLimit = clampInt(
+          readPositiveInt(
+            String(request.query.edgeLimit ?? ""),
+            apiConfig.tokenGraphStageBaseEdgeLimit
+          ),
+          1,
+          apiConfig.tokenGraphMaxEdges
+        );
+        if (stage === "base") {
+          const graph2 = await deps.getFullTokenGraphImpl(tokenSymbol, {
+            includeTopHoldersLimit: 0,
+            edgeLimit: baseEdgeLimit
+          });
+          sendSuccess(request, response, {
+            tokenSymbol,
+            stage,
+            graph: graph2,
+            nextStage: "holders"
+          });
+          return;
+        }
+        const topHoldersLimit = clampInt(
+          readPositiveInt(String(request.query.topHoldersLimit ?? ""), 10),
+          1,
+          100
+        );
+        if (stage === "holders") {
+          const [graph2, topHolders] = await Promise.all([
+            deps.getFullTokenGraphImpl(tokenSymbol, {
+              includeTopHoldersLimit: 0,
+              edgeLimit: baseEdgeLimit
+            }),
+            deps.getTopHoldersImpl(tokenSymbol, topHoldersLimit)
+          ]);
+          sendSuccess(request, response, {
+            tokenSymbol,
+            stage,
+            graph: graph2,
+            topHolders,
+            nextStage: "full"
+          });
+          return;
+        }
+        const includeTopHolders = normalizeWithTopHolders(request);
+        const graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
+          includeTopHoldersLimit: includeTopHolders,
+          edgeLimit: apiConfig.tokenGraphMaxEdges
+        });
+        sendSuccess(request, response, {
+          tokenSymbol,
+          stage,
+          graph
+        });
       } catch (error) {
         handleRouteError(response, error);
       }
@@ -72820,6 +73958,35 @@ function createApiApp(deps = defaultDeps) {
     }
   );
   app.get(
+    "/precomputed/tokens/:tokenSymbol/overview",
+    async (request, response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol }
+          );
+        }
+        const viewKey = `token-overview:${tokenSymbol}`;
+        let precomputed = await deps.getPrecomputedApiViewImpl(viewKey);
+        if (!precomputed) {
+          await deps.refreshTokenPrecomputedViewsImpl(tokenSymbol);
+          precomputed = await deps.getPrecomputedApiViewImpl(viewKey);
+        }
+        sendSuccess(request, response, {
+          tokenSymbol,
+          source: precomputed ? "precomputed" : "generated",
+          overview: precomputed
+        });
+      } catch (error) {
+        handleRouteError(response, error);
+      }
+    }
+  );
+  app.get(
     "/analytics/tokens/:tokenSymbol/top-movers",
     async (request, response) => {
       try {
@@ -72862,6 +74029,30 @@ function createApiApp(deps = defaultDeps) {
       }
     }
   );
+  app.get(
+    "/prices/:tokenSymbol",
+    async (request, response) => {
+      try {
+        const tokenSymbol = String(request.params.tokenSymbol).trim();
+        if (!isValidTokenSymbol(tokenSymbol)) {
+          throw new ApiError(
+            400,
+            "TOKEN_SYMBOL_INVALID",
+            "tokenSymbol path parameter is invalid",
+            { tokenSymbol }
+          );
+        }
+        const getTokenPrice = deps.getTokenPriceImpl ?? tokenPriceService.getQuote;
+        const quote = await getTokenPrice(tokenSymbol);
+        sendSuccess(request, response, quote, {
+          source: quote.source ?? "none",
+          stale: quote.stale
+        });
+      } catch (error) {
+        handleRouteError(response, error);
+      }
+    }
+  );
   app.post("/admin/cache/clear", (_request, response) => {
     deps.invalidateCacheImpl();
     deps.clearSubgraphCacheImpl();
@@ -72877,6 +74068,9 @@ function startApiServer(deps = defaultDeps) {
   const server = app.listen(apiConfig.port, () => {
     console.log(`API server listening on port ${apiConfig.port}`);
   });
+  server.keepAliveTimeout = 65e3;
+  server.headersTimeout = 66e3;
+  server.requestTimeout = 75e3;
   const shutdown = async () => {
     await deps.closeDatabasePoolImpl();
     await new Promise((resolve) => {
@@ -72968,6 +74162,8 @@ on-finished/index.js:
    * MIT Licensed
    *)
 
+content-type/dist/index.js:
+content-type/dist/index.js:
 content-type/index.js:
   (*!
    * content-type
@@ -73198,6 +74394,14 @@ compressible/index.js:
    * Copyright(c) 2013 Jonathan Ong
    * Copyright(c) 2014 Jeremiah Senkpiel
    * Copyright(c) 2015 Douglas Christopher Wilson
+   * MIT Licensed
+   *)
+
+destroy/index.js:
+  (*!
+   * destroy
+   * Copyright(c) 2014 Jonathan Ong
+   * Copyright(c) 2015-2022 Douglas Christopher Wilson
    * MIT Licensed
    *)
 

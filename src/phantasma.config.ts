@@ -124,6 +124,15 @@ export const apiConfig = {
   ),
   transactionPageSizeDefault: readNumber("PHANTASMA_TX_PAGE_SIZE", 50),
   transactionPageSizeMax: readNumber("PHANTASMA_TX_PAGE_SIZE_MAX", 250),
+  priceSaturnxBaseUrl:
+    process.env.PRICE_SATURNX_API_URL || "https://apiops.saturnx.cc/v1/tokens",
+  priceSaturnxNetwork: process.env.PRICE_SATURNX_NETWORK || "mainnet",
+  priceExplorerTokensUrl:
+    process.env.PRICE_EXPLORER_TOKENS_API_URL ||
+    "https://api-explorer.phantasma.info/api/v1/tokens",
+  priceCoingeckoIds: process.env.PRICE_COINGECKO_IDS,
+  priceCacheTtlMs: readPositiveNumber("PRICE_CACHE_TTL_MS", 60000),
+  priceStaleMaxMs: readPositiveNumber("PRICE_STALE_MAX_MS", 3600000),
 } as const;
 
 export const databaseConfig = {

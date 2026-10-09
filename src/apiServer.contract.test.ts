@@ -382,3 +382,36 @@ test("GET /precomputed/tokens/:tokenSymbol/overview hydrates and returns precomp
   assert.equal(response.body?.data?.source, "precomputed");
   assert.equal(response.body?.data?.tokenSymbol, "SOUL");
 });
+
+test("GET /prices/:tokenSymbol returns a cached price quote envelope", async () => {
+  const requestedSymbols: string[] = [];
+  const deps = createDeps();
+  deps.getTokenPriceImpl = async (tokenSymbol: string) => {
+    requestedSymbols.push(tokenSymbol);
+    return {
+      tokenSymbol: "KCAL",
+      priceUsd: 2.4738e-8,
+      priceChange24h: null,
+      source: "phantasma-explorer",
+      fetchedAt: "2026-10-09T13:00:00.000Z",
+      stale: false,
+    };
+  };
+  const app = createApiApp(deps);
+
+  const response = await request(app).get("/prices/KCAL");
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(requestedSymbols, ["KCAL"]);
+  assert.equal(response.body?.data?.priceUsd, 2.4738e-8);
+  assert.equal(response.body?.meta?.source, "phantasma-explorer");
+  assert.equal(response.body?.meta?.stale, false);
+});
+
+test("GET /prices/:tokenSymbol rejects invalid symbols", async () => {
+  const app = createApiApp(createDeps());
+  const response = await request(app).get("/prices/bad%20symbol!");
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body?.error?.code, "TOKEN_SYMBOL_INVALID");
+});
