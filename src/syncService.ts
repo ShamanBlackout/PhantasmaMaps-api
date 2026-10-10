@@ -10,6 +10,7 @@ import {
   getExhaustedBlockSyncClaims,
   getChainSyncHeight,
   recoverCommitGapBlockClaim,
+  renewBlockSyncClaim,
   requeueExhaustedBlockSyncClaims,
   resetStaleBlockSyncClaims,
   seedBlockSyncClaims,
@@ -640,6 +641,16 @@ async function runBlockRange(
   let commitQueue = Promise.resolve<number | null>(null);
   const commitFallbackHeight = startHeight - 1;
   const staleClaimSweepIntervalMs = 30_000;
+  const commitGapClaimAgeSeconds = Math.max(
+    60,
+    Math.floor(syncConfig.claimStaleAfterSeconds / 4),
+  );
+  // Blocks with large fan-out (e.g. airdrops touching thousands of addresses)
+  // can take longer than the reclaim thresholds, so live claims are renewed.
+  const claimHeartbeatMs = Math.max(
+    5_000,
+    Math.min(30_000, Math.floor((commitGapClaimAgeSeconds * 1000) / 3)),
+  );
   let lastStaleClaimSweepAt = Date.now();
   const touchedNodePairs = new Map<
     string,
@@ -685,7 +696,7 @@ async function runBlockRange(
           }
 
           const recoveredGapBlock = await recoverCommitGapBlockClaim(
-            Math.max(60, Math.floor(syncConfig.claimStaleAfterSeconds / 4)),
+            commitGapClaimAgeSeconds,
           );
           if (Number.isFinite(recoveredGapBlock)) {
             console.warn(
@@ -744,10 +755,28 @@ async function runBlockRange(
 
         activeBlocks.set(workerId, blockHeight);
 
+        let claimLost = false;
+        const heartbeat = setInterval(() => {
+          renewBlockSyncClaim(workerClaimId, blockHeight)
+            .then((renewed) => {
+              if (!renewed && !claimLost) {
+                claimLost = true;
+                console.warn(
+                  `Worker ${workerId} lost its claim on block ${blockHeight} while processing.`,
+                );
+              }
+            })
+            .catch((error: unknown) => {
+              console.warn(
+                `Worker ${workerId} could not renew claim on block ${blockHeight}. error=${error instanceof Error ? error.message : String(error)}`,
+              );
+            });
+        }, claimHeartbeatMs);
+
         try {
           const result = await processBlockHeight(blockHeight, {
             updateChainSyncState: false,
-          });
+          }).finally(() => clearInterval(heartbeat));
 
           for (const nodePair of result.touchedNodePairs) {
             touchedNodePairs.set(

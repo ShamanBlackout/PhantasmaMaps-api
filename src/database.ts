@@ -1295,6 +1295,23 @@ export async function getBlockSyncClaimsView(options?: {
   };
 }
 
+export async function renewBlockSyncClaim(
+  workerId: string,
+  blockHeight: number,
+): Promise<boolean> {
+  const result = await databasePool.query(
+    `UPDATE block_sync_claims
+        SET claimed_at = NOW(),
+            updated_at = NOW()
+      WHERE block_height = $1
+        AND status = 'claimed'
+        AND claimed_by = $2`,
+    [blockHeight, workerId],
+  );
+
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function completeBlockSyncClaim(
   workerId: string,
   blockHeight: number,

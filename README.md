@@ -1094,7 +1094,7 @@ Example response:
 
 1. `seedBlockSyncClaims()` ensures the target range exists as rows.
 2. `claimNextBlockHeight()` atomically picks the next eligible block, including stale `claimed` rows that have aged past `PHANTASMA_SYNC_CLAIM_STALE_AFTER_SECONDS`.
-3. `processBlockHeight()` fetches and persists data for that block.
+3. `processBlockHeight()` fetches and persists data for that block. While it runs, the worker renews its claim with `renewBlockSyncClaim()` (every ≤30 seconds) so slow, high-fan-out blocks such as airdrops are not reclaimed by stale or commit-gap recovery mid-flight.
 4. `completeBlockSyncClaim()` marks success.
 5. `failBlockSyncClaim()` marks failure and stores the error.
 6. `advanceChainSyncHeightFromClaims()` moves `__chain__` to the highest contiguous completed block.

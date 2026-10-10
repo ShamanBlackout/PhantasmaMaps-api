@@ -130,6 +130,7 @@ Purpose: own the PostgreSQL pool, sync writes, maintenance routines, and read qu
 - `getBlockSyncClaimWaitState(startHeight, endHeight, maxAttempts, retryBaseDelaySeconds, retryMaxDelaySeconds)`: summarize claim queue state.
 - `getExhaustedBlockSyncClaims(startHeight, endHeight, maxAttempts, limit)`: list failed claims that reached the retry cap.
 - `getBlockSyncClaimsView(options)`: return claim summary plus filtered rows for the API.
+- `renewBlockSyncClaim(workerId, blockHeight)`: refresh `claimed_at` on a live claim (heartbeat) so long-running blocks are not treated as stale.
 - `completeBlockSyncClaim(workerId, blockHeight)`: mark a claimed block complete.
 - `failBlockSyncClaim(workerId, blockHeight, errorMessage)`: mark a claimed block failed.
 - `advanceChainSyncHeightFromClaims(defaultPreviousHeight)`: advance `__chain__` to the highest contiguous completed block.
