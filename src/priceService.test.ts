@@ -35,6 +35,36 @@ test("parsers handle explorer, SaturnX and CoinGecko id config", () => {
     parseSaturnxQuote({ data: { symbol: "KCAL", priceUsd: "3e-8", change24h: -2 } }, "KCAL"),
     { priceUsd: 3e-8, priceChange24h: -2 },
   );
+  assert.deepEqual(
+    parseSaturnxQuote(
+      {
+        data: {
+          token: {
+            symbol: "SOUL",
+            priceUsd: 0.01108224,
+            change: { m5: null, h1: null, h6: null, h24: 1.486981260368392 },
+          },
+          pools: [{ id: "v2:SOUL_KCAL", tokenA: "SOUL", priceUsd: null }],
+        },
+      },
+      "SOUL",
+    ),
+    { priceUsd: 0.01108224, priceChange24h: 1.486981260368392 },
+  );
+  assert.deepEqual(
+    parseSaturnxQuote(
+      { data: [{ symbol: "ANGEL", priceUsd: 2.855e-12, change: { h24: -99.9 } }], meta: {} },
+      "ANGEL",
+    ),
+    { priceUsd: 2.855e-12, priceChange24h: -99.9 },
+  );
+  assert.equal(
+    parseSaturnxQuote(
+      { error: { code: "TOKEN_NOT_FOUND", message: "Unknown token on mainnet: CROWN" } },
+      "CROWN",
+    ),
+    null,
+  );
   assert.deepEqual(parseCoinGeckoIds("soul:phantasma, kcal:phantasma-energy"), {
     SOUL: "phantasma",
     KCAL: "phantasma-energy",

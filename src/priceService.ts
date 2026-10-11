@@ -79,7 +79,9 @@ export function parseSaturnxQuote(
   const root = asRecord(payload);
   if (!root) return null;
 
-  const data = root.data;
+  // The token detail endpoint (/v1/tokens/:symbol) responds with { data: { token, pools } }.
+  const dataRecord = asRecord(root.data);
+  const data = asRecord(dataRecord?.token) ?? root.data;
   const collection =
     root.tokens ?? root.prices ?? root.quotes ?? asRecord(data)?.tokens ?? data;
   let candidates: Record<string, unknown>[] = [];
