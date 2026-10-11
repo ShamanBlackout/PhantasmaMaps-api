@@ -72363,7 +72363,8 @@ function parseSaturnxQuote(payload, tokenSymbol) {
   const symbol = tokenSymbol.toUpperCase();
   const root = asRecord(payload);
   if (!root) return null;
-  const data = root.data;
+  const dataRecord = asRecord(root.data);
+  const data = asRecord(dataRecord?.token) ?? root.data;
   const collection = root.tokens ?? root.prices ?? root.quotes ?? asRecord(data)?.tokens ?? data;
   let candidates = [];
   if (asRecord(data) && !Array.isArray(collection)) {
