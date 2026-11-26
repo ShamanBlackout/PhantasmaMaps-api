@@ -152,6 +152,8 @@ export const databaseConfig = {
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   ssl: readBoolean("PGSSL", false),
+  sslCaCert: process.env.DATABASE_CA_CERT || undefined,
+  sslRootCertPath: process.env.PGSSLROOTCERT || undefined,
 } as const;
 
 export const connectionPoolConfig = {
@@ -162,6 +164,8 @@ export const connectionPoolConfig = {
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   ssl: readBoolean("PGSSL", false),
+  sslCaCert: process.env.DATABASE_CA_CERT || undefined,
+  sslRootCertPath: process.env.PGSSLROOTCERT || undefined,
 } as const;
 
 export const cacheDatabaseConfig = {
@@ -172,4 +176,10 @@ export const cacheDatabaseConfig = {
   password: process.env.CACHE_PGPASSWORD,
   database: process.env.CACHE_PGDATABASE,
   ssl: readBoolean("CACHE_PGSSL", readBoolean("PGSSL", false)),
+  sslCaCert:
+    process.env.CACHE_DATABASE_CA_CERT ||
+    process.env.DATABASE_CA_CERT ||
+    undefined,
+  sslRootCertPath:
+    process.env.CACHE_PGSSLROOTCERT || process.env.PGSSLROOTCERT || undefined,
 } as const;

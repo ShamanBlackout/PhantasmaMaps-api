@@ -108,6 +108,7 @@ Purpose: translate raw Phantasma blocks into normalized transfer records.
 Purpose: own the PostgreSQL pool, sync writes, maintenance routines, and read queries used by the API.
 
 - `buildPoolConfig()`: construct `pg.Pool` configuration.
+- `buildSslConfig()`: verified TLS when `DATABASE_CA_CERT`/`PGSSLROOTCERT` is set; otherwise unverified TLS when `PGSSL=true` (logs `database_tls_unverified` once).
 - `databasePool`: exported PostgreSQL connection pool.
 - `readRawEventAmountFromMetadata(metadata)`: decode a raw event amount from stored metadata.
 - `restoreFungibleTransactionAmountsFromMetadata()`: maintenance helper to repair fungible transaction amounts from metadata.

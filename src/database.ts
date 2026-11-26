@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   Pool,
   type PoolClient,
@@ -37,6 +38,8 @@ type DbConnectionConfig = {
   password?: string;
   database?: string;
   ssl: boolean;
+  sslCaCert?: string;
+  sslRootCertPath?: string;
 };
 
 const isApiProcess = process.argv.some((arg) =>
@@ -48,6 +51,39 @@ const isDirectDatabaseProcess = process.argv.some((arg) =>
     String(arg || ""),
   ),
 );
+
+let hasWarnedUnverifiedTls = false;
+
+function buildSslConfig(config: DbConnectionConfig): PoolConfig["ssl"] {
+  const ca =
+    config.sslCaCert?.replace(/\\n/g, "\n") ??
+    (config.sslRootCertPath
+      ? readFileSync(config.sslRootCertPath, "utf8")
+      : undefined);
+
+  if (ca) {
+    return { ca, rejectUnauthorized: true };
+  }
+
+  if (!config.ssl) {
+    return undefined;
+  }
+
+  if (!hasWarnedUnverifiedTls) {
+    hasWarnedUnverifiedTls = true;
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "database_tls_unverified",
+        timestamp: new Date().toISOString(),
+        message:
+          "PGSSL is enabled without a CA certificate; the server certificate is not verified. Set DATABASE_CA_CERT or PGSSLROOTCERT to enable verification.",
+      }),
+    );
+  }
+
+  return { rejectUnauthorized: false };
+}
 
 function buildPoolConfig(
   config: DbConnectionConfig,
@@ -61,11 +97,12 @@ function buildPoolConfig(
     connectionTimeoutMillis: 5000, // Wait up to 5 seconds to acquire a connection
     query_timeout: 30000, // Query timeout of 30 seconds
   };
+  const ssl = buildSslConfig(config);
 
   if (config.connectionString) {
     return {
       connectionString: config.connectionString,
-      ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+      ssl,
       ...baseConfig,
     };
   }
@@ -76,7 +113,7 @@ function buildPoolConfig(
     user: config.user,
     password: config.password,
     database: config.database,
-    ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+    ssl,
     ...baseConfig,
   };
 }

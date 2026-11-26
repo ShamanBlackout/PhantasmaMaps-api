@@ -249,7 +249,15 @@ Connection mode by process:
 : Optional discrete PostgreSQL connection settings.
 
 `PGSSL`
-: `true` enables TLS with `rejectUnauthorized: false`.
+: `true` enables TLS. Without a CA certificate (below) the server certificate is not verified (`rejectUnauthorized: false`) and a `database_tls_unverified` warning is logged once at startup.
+
+`DATABASE_CA_CERT`
+: PEM-encoded CA certificate for the database server (literal `\n` sequences are accepted). When set, TLS is enabled and the server certificate and hostname are verified. On DigitalOcean App Platform you can bind this to `${your-db.CA_CERT}`.
+
+`PGSSLROOTCERT`
+: Path to a CA certificate file. Used like `DATABASE_CA_CERT` when that variable is not set.
+
+Note: node-postgres gives TLS parameters inside the connection string (`sslmode`, `sslrootcert`, ...) precedence over the settings above. To use `DATABASE_CA_CERT`/`PGSSLROOTCERT`, leave `sslmode` out of `DATABASE_URL`/`CONNECTION_POOL`.
 
 ### Dedicated Cache Database (Optional)
 
@@ -263,6 +271,9 @@ Use these only if you want the API response cache table (`api_query_cache`) in a
 
 `CACHE_PGSSL`
 : `true` enables TLS for cache DB. Defaults to `PGSSL` when omitted.
+
+`CACHE_DATABASE_CA_CERT`, `CACHE_PGSSLROOTCERT`
+: CA certificate (PEM or file path) for the cache DB. Default to `DATABASE_CA_CERT` / `PGSSLROOTCERT` when omitted.
 
 Cache freshness for token-scoped keys is validated against main DB
 `sync_state.updated_at` for that token symbol. If the cache row is older than
