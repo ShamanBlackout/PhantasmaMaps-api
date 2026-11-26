@@ -229,7 +229,7 @@ Important note: [sql/maintenance/004_truncate_all.sql](sql/maintenance/004_trunc
 
 ## ENVIRONMENT
 
-The application loads environment variables through `process.loadEnvFile?.()` in Node 22, so a local `.env` file is read automatically when present.
+The application loads environment variables through `process.loadEnvFile()` in Node 22, so a local `.env` file is read automatically when present. A missing `.env` is ignored, so containers and hosted platforms can provide variables directly.
 
 ### Database
 
@@ -424,7 +424,13 @@ if every source fails, the last good quote is served with `stale: true`.
 ## COMMANDS
 
 `npm run api`
-: Starts the Express API server.
+: Starts the Express API server from TypeScript sources (via `tsx`).
+
+`npm run build`
+: Bundles `src/startApiServer.ts` and `src/backfill.ts` into self-contained `dist/*.js` files with esbuild.
+
+`npm run start:prod`
+: Runs the bundled API server (`node dist/startApiServer.js`). Run `npm run build` first.
 
 `npm run sync`
 : Runs incremental sync from the current committed chain height to the latest RPC height.
@@ -561,11 +567,14 @@ The API process is read-only. Keeping the HTTP server running does not ingest ne
 
 The repository includes [Dockerfile](Dockerfile). It:
 
-- uses `node:22-bookworm-slim`
-- runs `npm ci`
-- copies the repository into `/app`
+- uses a two-stage `node:22-bookworm-slim` build
+- bundles `src/startApiServer.ts` and `src/backfill.ts` with esbuild (`npm run build`) in the build stage
+- ships only the self-contained `dist/` bundles in the runtime image (no `node_modules`, no TypeScript toolchain)
+- runs as the unprivileged `node` user
 - exposes port `3000`
-- defaults to `npm run api`
+- defaults to `node dist/startApiServer.js`, so `SIGTERM` reaches the API directly and triggers a graceful shutdown
+
+`.env` files are excluded from the build context; pass configuration at runtime with `--env-file` or platform environment variables.
 
 Build the image:
 
@@ -576,22 +585,24 @@ docker build -t phantasmamaps-api .
 Run the API container:
 
 ```bash
-docker run --rm -p 3000:3000 --env-file .env phantasmamaps-api
+docker run --rm --init -p 3000:3000 --env-file .env phantasmamaps-api
 ```
 
 Run a one-off sync job from the same image:
 
 ```bash
-docker run --rm --env-file .env phantasmamaps-api npm run sync
+docker run --rm --init --env-file .env phantasmamaps-api node dist/backfill.js
 ```
 
 ### Docker Compose
 
 The repository includes [docker-compose.yml](docker-compose.yml) with three services:
 
-- `api`: long-running HTTP server on port `3000`
+- `api`: long-running HTTP server on port `3000`, with a `/health` container healthcheck
 - `backfill`: one-shot historical sync job under the `jobs` profile
 - `sync`: one-shot incremental sync job under the `jobs` profile
+
+All services run with `init: true` so signals are forwarded and zombie processes are reaped.
 
 Start the API service:
 

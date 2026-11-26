@@ -1,8 +1,15 @@
 node_modules
+dist
 npm-debug.log
 Dockerfile*
 docker-compose*.yml
 .git
+.github
 .gitignore
 *.log
+.env
+.env.*
 test-database-snapshot.json
+backfill-dry-run.json
+labeling-dry-run.json
+labeling-review-sample.json

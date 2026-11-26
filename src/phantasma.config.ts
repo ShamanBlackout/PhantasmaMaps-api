@@ -1,4 +1,11 @@
-process.loadEnvFile?.();
+try {
+  process.loadEnvFile();
+} catch (error) {
+  // .env is optional; containers and hosted platforms inject env vars directly.
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    throw error;
+  }
+}
 
 function readNumber(name: string, fallback: number): number {
   const rawValue = process.env[name];

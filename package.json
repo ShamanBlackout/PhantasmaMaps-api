@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "npm run api",
-    "build": "esbuild src/startApiServer.ts --bundle --platform=node --target=node22 --outfile=dist/startApiServer.js --external:pg-native",
+    "build": "esbuild src/startApiServer.ts src/backfill.ts --bundle --platform=node --target=node22 --outdir=dist --external:pg-native",
     "start:prod": "node dist/startApiServer.js",
     "api": "node ./scripts/startApiServer.js",
     "backfill": "node ./node_modules/tsx/dist/cli.mjs src/backfill.ts",
