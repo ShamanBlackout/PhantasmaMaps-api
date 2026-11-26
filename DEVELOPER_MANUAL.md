@@ -105,7 +105,19 @@ Purpose: translate raw Phantasma blocks into normalized transfer records.
 
 ### `src/database.ts`
 
-Purpose: own the PostgreSQL pool, sync writes, maintenance routines, and read queries used by the API.
+Purpose: the public database API. It is a barrel that re-exports the functions below from `src/db/*`; application code should keep importing from `./database`.
+
+| Module | Contents |
+| --- | --- |
+| `src/db/connection.ts` | PostgreSQL pools (main + cache), TLS config, process-mode detection, read retry helper, `closeDatabasePool`, `testDatabaseConnection`, `withDatabaseTransaction` |
+| `src/db/rowMappers.ts` | Row-to-record mappers and amount normalization helpers |
+| `src/db/blockClaims.ts` | `block_sync_claims` queue and `__chain__` checkpoint reads |
+| `src/db/ingestion.ts` | Sync-state reads and transfer/node/edge/metadata upserts |
+| `src/db/amountNormalization.ts` | Normalized balance and amount maintenance routines |
+| `src/db/graphQueries.ts` | Token, holder, graph, subgraph and path queries (with the in-process subgraph cache) |
+| `src/db/listQueries.ts` | Paginated transaction and labeled-node queries |
+| `src/db/analytics.ts` | Daily token metrics and top movers |
+| `src/db/apiCache.ts` | Persistent API response cache and precomputed views |
 
 - `buildPoolConfig()`: construct `pg.Pool` configuration.
 - `buildSslConfig()`: verified TLS when `DATABASE_CA_CERT`/`PGSSLROOTCERT` is set; otherwise unverified TLS when `PGSSL=true` (logs `database_tls_unverified` once).
@@ -244,6 +256,6 @@ Purpose: remove old completed claim rows.
 
 ## MAINTENANCE NOTES
 
-- `src/database.ts` contains both runtime query code and repair logic for previously mis-stored fungible amounts. To re-run the edge and transaction amount repair on its own, use `npm run sync:nodes-normalized`.
+- `src/db/amountNormalization.ts` contains repair logic for previously mis-stored fungible amounts. To re-run the edge and transaction amount repair on its own, use `npm run sync:nodes-normalized`.
 - `claimNextBlockHeight()` now treats stale `claimed` rows as directly claimable, which is stronger than the earlier idle-poll reset approach because workers do not need a separate reset pass before reclaiming abandoned work.
 - `src/syncNodeBalancesNormalized.ts` duplicates some parsing helpers from `src/syncService.ts`; if the repository grows, those can be moved into a shared utility module.
