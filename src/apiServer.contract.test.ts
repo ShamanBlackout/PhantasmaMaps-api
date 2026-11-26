@@ -370,6 +370,26 @@ test("unexpected route errors return a generic message", async () => {
   }
 });
 
+test("GET /health does not expose database error details", async () => {
+  const deps = createDeps();
+  deps.testDatabaseConnectionImpl = async () => {
+    throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
+  };
+  const originalConsoleError = console.error;
+  console.error = () => {};
+
+  try {
+    const app = createApiApp(deps);
+    const response = await request(app).get("/health");
+
+    assert.equal(response.status, 503);
+    assert.equal(response.body?.data?.database, "down");
+    assert.doesNotMatch(JSON.stringify(response.body), /ECONNREFUSED/);
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
 test("GET /graph/address/:address/staged returns staged payload", async () => {
   const deps = createDeps();
   deps.getAddressSubgraphImpl = async (

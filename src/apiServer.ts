@@ -856,8 +856,15 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
         database: "up",
       });
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "api_health_database_down",
+          timestamp: new Date().toISOString(),
+          requestId: response.locals.requestId ?? null,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
 
       sendSuccess(
         _request,
@@ -867,7 +874,7 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
           status: "degraded",
           database: "down",
           error: {
-            message: errorMessage,
+            message: "Database connection check failed.",
           },
         },
         {
