@@ -242,14 +242,8 @@ Purpose: remove old completed claim rows.
 - `readNumber(name, fallback)`: parse the cleanup retention period from env.
 - `cleanupCompletedClaims()`: delete completed `block_sync_claims` older than the configured day count, which currently defaults to 2 days.
 
-### `_temp_restore_fungible_amounts.ts`
-
-Purpose: maintenance helper for repairing fungible edge and transaction amounts.
-
-- `run()`: execute the edge and transaction normalization repair routines and print the result.
-
 ## MAINTENANCE NOTES
 
-- `src/database.ts` contains both runtime query code and repair logic for previously mis-stored fungible amounts.
+- `src/database.ts` contains both runtime query code and repair logic for previously mis-stored fungible amounts. To re-run the edge and transaction amount repair on its own, use `npm run sync:nodes-normalized`.
 - `claimNextBlockHeight()` now treats stale `claimed` rows as directly claimable, which is stronger than the earlier idle-poll reset approach because workers do not need a separate reset pass before reclaiming abandoned work.
 - `src/syncNodeBalancesNormalized.ts` duplicates some parsing helpers from `src/syncService.ts`; if the repository grows, those can be moved into a shared utility module.

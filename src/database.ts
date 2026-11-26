@@ -47,7 +47,7 @@ const isApiProcess = process.argv.some((arg) =>
 );
 
 const isDirectDatabaseProcess = process.argv.some((arg) =>
-  /(^|[\\/])(backfill|backfillDryRun|syncNodeBalancesNormalized|cleanupBlockClaims|testDatabaseInserts|labelingDryRun|labelingReviewSample|_temp_restore_fungible_amounts)(\.ts|\.js)?$/i.test(
+  /(^|[\\/])(backfill|backfillDryRun|syncNodeBalancesNormalized|cleanupBlockClaims|testDatabaseInserts|labelingDryRun|labelingReviewSample)(\.ts|\.js)?$/i.test(
     String(arg || ""),
   ),
 );
