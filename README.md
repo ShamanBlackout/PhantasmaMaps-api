@@ -289,7 +289,7 @@ main DB, updates `api_query_cache`, and serves the fresh response.
 : HTTP port. Default: `3000`.
 
 `PHANTASMA_API_CORS_ORIGINS`
-: Comma-separated allowed origins. If omitted, CORS is permissive.
+: Comma-separated allowed origins. If omitted, CORS is permissive and a startup warning is logged when `NODE_ENV=production`; set it to the deployed frontend origin(s) in production.
 
 ### Token Prices
 

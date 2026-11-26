@@ -18,14 +18,18 @@ import { registerAnalyticsRoutes } from "./routes/analytics";
 
 export type { ApiServerDeps } from "./http/deps";
 
+function readAllowedCorsOrigins(): string[] {
+  return String(process.env.PHANTASMA_API_CORS_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
 export function createApiApp(deps: ApiServerDeps = defaultDeps) {
   const app = express();
   app.disable("x-powered-by");
 
-  const allowedOrigins = String(process.env.PHANTASMA_API_CORS_ORIGINS ?? "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const allowedOrigins = readAllowedCorsOrigins();
 
   app.use(
     cors({
@@ -66,6 +70,16 @@ export function startApiServer(deps: ApiServerDeps = defaultDeps): {
   server: Server;
   shutdown: () => Promise<void>;
 } {
+  if (
+    process.env.NODE_ENV === "production" &&
+    readAllowedCorsOrigins().length === 0
+  ) {
+    console.warn(
+      "PHANTASMA_API_CORS_ORIGINS is not set: any website can call this API from a browser. " +
+        "Set it to the frontend origin(s), e.g. https://example.com.",
+    );
+  }
+
   const app = createApiApp(deps);
   const server = app.listen(apiConfig.port, () => {
     console.log(`API server listening on port ${apiConfig.port}`);
