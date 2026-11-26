@@ -4,7 +4,9 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+# Skip install scripts: phantasma-sdk-ts pulls in Ledger USB transports
+# (node-hid, usb) whose native builds the API never loads.
+RUN npm ci --ignore-scripts
 
 COPY tsconfig.json ./
 COPY src ./src
