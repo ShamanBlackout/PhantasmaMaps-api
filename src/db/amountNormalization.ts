@@ -5,6 +5,13 @@ import { normalizeRawAmount } from "./rowMappers";
 
 const RESTORE_BATCH_SIZE = 500;
 
+export function normalizedAmountSqlExpression(
+  amountExpression: string,
+  decimalsExpression: string,
+): string {
+  return `${amountExpression} * POWER(10::numeric, -${decimalsExpression})`;
+}
+
 function readRawEventAmountFromMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): string | null {
@@ -347,7 +354,7 @@ export async function syncNodeBalancesNormalizedForToken(
        UPDATE nodes n
           SET balance_normalized = CASE
             WHEN tm.decimals <= 0 THEN n.balance
-            ELSE n.balance / POWER(10::numeric, tm.decimals)
+            ELSE ${normalizedAmountSqlExpression("n.balance", "tm.decimals")}
           END
          FROM token_metadata tm
         WHERE tm.token_symbol = n.token_symbol
@@ -355,7 +362,7 @@ export async function syncNodeBalancesNormalizedForToken(
           AND n.balance IS NOT NULL
           AND n.balance_normalized IS DISTINCT FROM CASE
             WHEN tm.decimals <= 0 THEN n.balance
-            ELSE n.balance / POWER(10::numeric, tm.decimals)
+            ELSE ${normalizedAmountSqlExpression("n.balance", "tm.decimals")}
           END
       RETURNING 1
      )
@@ -405,7 +412,7 @@ export async function syncTransactionAmountsNormalized(): Promise<{
               amount_normalized = CASE
                 WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
                 WHEN tm.decimals <= 0 THEN t.amount
-                ELSE t.amount / POWER(10::numeric, tm.decimals)
+                ELSE ${normalizedAmountSqlExpression("t.amount", "tm.decimals")}
               END
          FROM token_metadata tm
         WHERE tm.token_symbol = t.token_symbol
@@ -418,7 +425,7 @@ export async function syncTransactionAmountsNormalized(): Promise<{
             OR t.amount_normalized IS DISTINCT FROM CASE
               WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
               WHEN tm.decimals <= 0 THEN t.amount
-              ELSE t.amount / POWER(10::numeric, tm.decimals)
+              ELSE ${normalizedAmountSqlExpression("t.amount", "tm.decimals")}
             END
           )
       RETURNING 1
@@ -466,14 +473,14 @@ export async function syncNodeBalancesNormalized(): Promise<{
        UPDATE nodes n
           SET balance_normalized = CASE
             WHEN tm.decimals <= 0 THEN n.balance
-            ELSE n.balance / POWER(10::numeric, tm.decimals)
+            ELSE ${normalizedAmountSqlExpression("n.balance", "tm.decimals")}
           END
          FROM token_metadata tm
         WHERE tm.token_symbol = n.token_symbol
           AND n.balance IS NOT NULL
           AND n.balance_normalized IS DISTINCT FROM CASE
             WHEN tm.decimals <= 0 THEN n.balance
-            ELSE n.balance / POWER(10::numeric, tm.decimals)
+            ELSE ${normalizedAmountSqlExpression("n.balance", "tm.decimals")}
           END
       RETURNING 1
      )
@@ -523,7 +530,7 @@ export async function syncEdgeAmountsNormalized(): Promise<{
               amount_normalized = CASE
                 WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
                 WHEN tm.decimals <= 0 THEN e.amount
-                ELSE e.amount / POWER(10::numeric, tm.decimals)
+                ELSE ${normalizedAmountSqlExpression("e.amount", "tm.decimals")}
               END
          FROM token_metadata tm
         WHERE tm.token_symbol = e.token_symbol
@@ -536,7 +543,7 @@ export async function syncEdgeAmountsNormalized(): Promise<{
             OR e.amount_normalized IS DISTINCT FROM CASE
               WHEN COALESCE((tm.flags->>'isFungible')::boolean, false) = false THEN 1::numeric
               WHEN tm.decimals <= 0 THEN e.amount
-              ELSE e.amount / POWER(10::numeric, tm.decimals)
+              ELSE ${normalizedAmountSqlExpression("e.amount", "tm.decimals")}
             END
           )
       RETURNING 1

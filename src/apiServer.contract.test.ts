@@ -140,6 +140,44 @@ test("GET /graph/token/:tokenSymbol accepts single-character symbols", async () 
   assert.equal(receivedTokenSymbol, "D");
 });
 
+test("token graph edge caps reach queries and use distinct cache keys", async () => {
+  const deps = createDeps();
+  const cacheKeys: string[] = [];
+  const limits: Array<number | undefined> = [];
+  deps.cacheMiddlewareImpl = (key) => {
+    cacheKeys.push(key);
+    return noCache();
+  };
+  deps.getFullTokenGraphImpl = async (_symbol, options) => {
+    limits.push(options.edgeLimit);
+    return { nodes: [], edges: [] };
+  };
+  const app = createApiApp(deps);
+  assert.equal((await request(app).get("/graph/token/SOUL?edgeLimit=2")).status, 200);
+  assert.equal((await request(app).get("/graph/token/SOUL?edgeLimit=3")).status, 200);
+  assert.deepEqual(limits, [2, 3]);
+  assert.notEqual(cacheKeys[0], cacheKeys[1]);
+  const invalid = await request(app).get(
+    `/graph/token/SOUL?edgeLimit=${apiConfig.tokenGraphMaxEdges + 1}`,
+  );
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.code, "GRAPH_EDGE_LIMIT_EXCEEDED");
+});
+
+test("degraded token graphs do not exceed the caller's small edge cap", async () => {
+  const deps = createDeps();
+  const limits: Array<number | undefined> = [];
+  deps.getFullTokenGraphImpl = async (_symbol, options) => {
+    limits.push(options.edgeLimit);
+    if (limits.length === 1) throw new Error("temporary graph failure");
+    return { nodes: [], edges: [] };
+  };
+  const result = await request(createApiApp(deps)).get("/graph/token/SOUL?edgeLimit=2");
+  assert.equal(result.status, 200);
+  assert.deepEqual(limits, [2, 2]);
+  assert.equal(result.body.meta.appliedLimits.edgeLimit, 2);
+});
+
 test("GET /graph/token/:tokenSymbol accepts topHoldersLimit override", async () => {
   const app = createApiApp(createDeps());
   const response = await request(app).get(

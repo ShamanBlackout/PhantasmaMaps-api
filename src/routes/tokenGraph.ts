@@ -6,6 +6,7 @@ import {
   ensurePositiveEdgeLimit,
   isValidTokenSymbol,
   normalizeTokenGraphStage,
+  normalizeTokenGraphEdgeLimit,
   normalizeWithTopHolders,
   readPositiveInt,
 } from "../http/params";
@@ -202,10 +203,13 @@ async function sendTokenGraphResponse(
       throw primaryError;
     }
 
-    const fallbackEdgeLimit = Math.max(
-      200,
-      Math.floor(
-        Number(effectiveEdgeLimit ?? apiConfig.tokenGraphMaxEdges) / 2,
+    const fallbackEdgeLimit = Math.min(
+      effectiveEdgeLimit ?? apiConfig.tokenGraphMaxEdges,
+      Math.max(
+        200,
+        Math.floor(
+          Number(effectiveEdgeLimit ?? apiConfig.tokenGraphMaxEdges) / 2,
+        ),
       ),
     );
     graph = await deps.getFullTokenGraphImpl(tokenSymbol, {
@@ -399,13 +403,15 @@ export function registerTokenGraphRoutes(
     "/graph/token/:tokenSymbol",
     (request: Request, response: Response, next) => {
       let includeTopHolders = 0;
+      let edgeLimit: number;
       try {
         includeTopHolders = normalizeWithTopHolders(request);
+        edgeLimit = normalizeTokenGraphEdgeLimit(request);
       } catch (error: unknown) {
         handleRouteError(response, error);
         return;
       }
-      const cacheKey = `token-graph:${String(request.params.tokenSymbol).toUpperCase()}:${includeTopHolders}`;
+      const cacheKey = `token-graph:${String(request.params.tokenSymbol).toUpperCase()}:${includeTopHolders}:${edgeLimit}`;
       deps.cacheMiddlewareImpl(cacheKey, 1 * 60 * 1000)(
         request,
         response,
@@ -431,7 +437,7 @@ export function registerTokenGraphRoutes(
           deps,
           tokenSymbol,
           includeTopHolders,
-          apiConfig.tokenGraphMaxEdges,
+          normalizeTokenGraphEdgeLimit(request),
           "standard",
         );
       } catch (error: unknown) {

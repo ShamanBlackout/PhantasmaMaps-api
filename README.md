@@ -252,13 +252,17 @@ Connection mode by process:
 : Optional discrete PostgreSQL connection settings.
 
 `PGSSL`
-: `true` enables TLS. Without a CA certificate (below) the server certificate is not verified (`rejectUnauthorized: false`) and a `database_tls_unverified` warning is logged once at startup.
+: `true` enables TLS with server-certificate and hostname verification. Without a custom CA certificate, Node.js uses its trusted system certificate authorities.
 
 `DATABASE_CA_CERT`
-: PEM-encoded CA certificate for the database server (literal `\n` sequences are accepted). When set, TLS is enabled and the server certificate and hostname are verified. On DigitalOcean App Platform you can bind this to `${your-db.CA_CERT}`.
+: PEM-encoded CA certificate for the database server (literal `\n` sequences are accepted). When set, TLS is enabled and the server certificate and hostname are verified against this CA. On DigitalOcean App Platform you can bind this to `${your-db.CA_CERT}`.
 
 `PGSSLROOTCERT`
 : Path to a CA certificate file. Used like `DATABASE_CA_CERT` when that variable is not set.
+
+If the database certificate is not trusted by the Node.js system certificate store,
+configure `DATABASE_CA_CERT` or `PGSSLROOTCERT`. Connections fail rather than
+silently accepting an unverified server certificate.
 
 Note: node-postgres gives TLS parameters inside the connection string (`sslmode`, `sslrootcert`, ...) precedence over the settings above. To use `DATABASE_CA_CERT`/`PGSSLROOTCERT`, leave `sslmode` out of `DATABASE_URL`/`CONNECTION_POOL`.
 
@@ -948,6 +952,10 @@ Example response:
 
 Returns the full stored graph for a token up to the configured edge cap.
 
+`edgeLimit` may request a smaller positive edge cap. It is included in the cache
+key and remains an upper bound if a degraded query is used. Values above
+`PHANTASMA_TOKEN_GRAPH_MAX_EDGES` are rejected.
+
 Example request:
 
 ```bash
@@ -1038,7 +1046,13 @@ Example response:
 
 ### `GET /transactions`
 
-Returns paginated transaction data.
+Returns paginated transaction data. `total` counts all matching grouped
+transactions, including when the requested page is empty.
+
+Database `TIMESTAMP` values are interpreted as UTC and JavaScript dates are sent
+in UTC, independent of the Node host timezone. Configure the database timezone
+as UTC as well. This does not rewrite historical timestamps that may already
+have been stored in local time.
 
 Query parameters:
 

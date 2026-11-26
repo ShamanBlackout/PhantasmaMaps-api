@@ -480,6 +480,7 @@ export async function getTokenTopMovers(
      FULL OUTER JOIN baseline_balances b
        ON b.address = l.address
      WHERE (SELECT value FROM baseline_date) IS NOT NULL
+     AND COALESCE(l.address, b.address) ~ '^[PS][a-zA-Z0-9]{20,}$'
        AND (COALESCE(l.balance, 0::numeric) > 0::numeric
         OR COALESCE(b.balance, 0::numeric) > 0::numeric
        )

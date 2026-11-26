@@ -17,10 +17,28 @@ export function readPositiveInt(
 export function ensurePositiveEdgeLimit(value: number | undefined): number {
   const parsed = Number(value);
   if (Number.isFinite(parsed) && parsed > 0) {
-    return Math.floor(parsed);
+    return Math.max(1, Math.floor(parsed));
   }
 
   return apiConfig.tokenGraphMaxEdges;
+}
+
+export function normalizeTokenGraphEdgeLimit(request: Request): number {
+  const edgeLimit = ensurePositiveEdgeLimit(
+    readPositiveInt(
+      String(request.query.edgeLimit ?? ""),
+      apiConfig.tokenGraphMaxEdges,
+    ),
+  );
+  if (edgeLimit > apiConfig.tokenGraphMaxEdges) {
+    throw new ApiError(
+      400,
+      "GRAPH_EDGE_LIMIT_EXCEEDED",
+      `edgeLimit must be <= ${apiConfig.tokenGraphMaxEdges}`,
+      { received: edgeLimit, max: apiConfig.tokenGraphMaxEdges },
+    );
+  }
+  return edgeLimit;
 }
 
 export function readOptionalNumber(

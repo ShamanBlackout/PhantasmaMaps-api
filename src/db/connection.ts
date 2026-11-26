@@ -1,6 +1,8 @@
 import {
   type PoolConfig,
   Pool,
+  defaults,
+  types,
   type QueryResultRow,
   type QueryResult,
   type PoolClient,
@@ -11,6 +13,15 @@ import {
   connectionPoolConfig,
   cacheDatabaseConfig,
 } from "../phantasma.config";
+
+// TIMESTAMP columns store UTC even when the Node process uses a local timezone.
+defaults.parseInputDatesAsUTC = true;
+const parseTimestampWithTimezone = types.getTypeParser(types.builtins.TIMESTAMPTZ);
+types.setTypeParser(types.builtins.TIMESTAMP, (value) =>
+  parseTimestampWithTimezone(
+    /^-?infinity$/.test(value) ? value : value.replace(/( BC)?$/, "+00$1"),
+  ),
+);
 
 type DbConnectionConfig = {
   connectionString?: string;
@@ -34,9 +45,7 @@ const isDirectDatabaseProcess = process.argv.some((arg) =>
   ),
 );
 
-let hasWarnedUnverifiedTls = false;
-
-function buildSslConfig(config: DbConnectionConfig): PoolConfig["ssl"] {
+export function buildSslConfig(config: DbConnectionConfig): PoolConfig["ssl"] {
   const ca =
     config.sslCaCert?.replace(/\\n/g, "\n") ??
     (config.sslRootCertPath
@@ -51,20 +60,7 @@ function buildSslConfig(config: DbConnectionConfig): PoolConfig["ssl"] {
     return undefined;
   }
 
-  if (!hasWarnedUnverifiedTls) {
-    hasWarnedUnverifiedTls = true;
-    console.warn(
-      JSON.stringify({
-        level: "warn",
-        event: "database_tls_unverified",
-        timestamp: new Date().toISOString(),
-        message:
-          "PGSSL is enabled without a CA certificate; the server certificate is not verified. Set DATABASE_CA_CERT or PGSSLROOTCERT to enable verification.",
-      }),
-    );
-  }
-
-  return { rejectUnauthorized: false };
+  return { rejectUnauthorized: true };
 }
 
 function buildPoolConfig(

@@ -109,6 +109,8 @@ export async function getTransactionsPage(options: {
   }
 
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const groupByClause = `tx_hash, event_kind, token_symbol, block_height,
+                         timestamp, from_address, to_address, related_address`;
   const pageSize = Math.min(
     Math.max(options.pageSize, 1),
     apiConfig.transactionPageSizeMax,
@@ -233,22 +235,28 @@ export async function getTransactionsPage(options: {
             COUNT(*) OVER () AS total
       FROM public.transactions
        ${whereClause}
-      GROUP BY tx_hash,
-               event_kind,
-               token_symbol,
-               block_height,
-               timestamp,
-               from_address,
-               to_address,
-               related_address
+      GROUP BY ${groupByClause}
       ORDER BY ${orderByClause}
       LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
     "get_transactions_page",
   );
 
-  // Extract total from first row (COUNT(*) OVER() returns same value for all rows)
-  const total = result.rows.length > 0 ? Number(result.rows[0].total) : 0;
+  let total = result.rows.length > 0 ? Number(result.rows[0].total) : 0;
+  if (result.rows.length === 0 && offset > 0) {
+    // A window count has no row to carry the total on an out-of-range page.
+    const countResult = await queryReadWithRetry<{ total: string }>(
+      `SELECT COUNT(*) AS total
+         FROM (
+           SELECT 1 FROM public.transactions
+           ${whereClause}
+           GROUP BY ${groupByClause}
+         ) grouped_transactions`,
+      values.slice(0, -2),
+      "get_transactions_page_total",
+    );
+    total = Number(countResult.rows[0].total);
+  }
 
   return {
     page,
