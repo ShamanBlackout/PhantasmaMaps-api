@@ -20,10 +20,24 @@ This manual is the symbol-level companion to [README.md](README.md). The README 
 
 ### `src/apiServer.ts`
 
-Purpose: defines the Express application and read-only HTTP API.
+Purpose: assembles the Express application (CORS, compression, request IDs) and owns the server lifecycle. Route handlers and shared HTTP helpers live in sibling folders:
 
-- `readPositiveInt(value, fallback)`: parse a positive integer query value or return the fallback.
-- `readStringList(value)`: split a comma-separated query string into trimmed items.
+| Module | Contents |
+| --- | --- |
+| `src/http/apiError.ts` | `ApiError` and its error codes. |
+| `src/http/deps.ts` | `ApiServerDeps` (injectable database/RPC/cache/price implementations) and the production `defaultDeps`. |
+| `src/http/params.ts` | Query/path parsing and validation: `readPositiveInt`, `readStringList`, `readPageNumber`, `clampInt`, symbol/address validators, graph stage normalizers. |
+| `src/http/responses.ts` | `sendSuccess` (envelope + ETag), `sendError`, `handleRouteError`, request IDs. |
+| `src/http/cacheKeys.ts` | Response-cache key builders. |
+| `src/routes/system.ts` | `/health`, `/sync-status`, `/sync-claims`. |
+| `src/routes/tokens.ts` | `/tokens`, token metadata, top holders, address activity, `/prices/:tokenSymbol`. |
+| `src/routes/addressGraph.ts` | Address graph (staged and full), `/connections/address/:address`, `/trace/paths`. |
+| `src/routes/tokenGraph.ts` | Token graph routes and live-balance reconciliation. |
+| `src/routes/lists.ts` | `/transactions`, `/labels/nodes`. |
+| `src/routes/analytics.ts` | Analytics, precomputed overview, and top-movers routes. |
+
+Handlers:
+
 - `/health` handler: verifies PostgreSQL connectivity.
 - `/sync-status` handler: returns `sync_state` rows and the live chain head when RPC is available.
 - `/sync-claims` handler: returns claim summary and detailed claim rows.

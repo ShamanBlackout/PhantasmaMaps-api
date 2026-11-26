@@ -56,8 +56,11 @@ The worker side processes blocks by height. Each block is claimed through the `b
 
 ```text
 src/
-  apiServer.ts
-  database.ts
+  apiServer.ts        # Express app assembly + server lifecycle
+  http/               # shared request parsing, response envelopes, cache keys, deps
+  routes/             # route handlers grouped by area
+  database.ts         # barrel re-exporting src/db/*
+  db/                 # pools, ingestion, graph/list queries, analytics, API cache
   rpcClient.ts
   syncService.ts
   transferParser.ts
