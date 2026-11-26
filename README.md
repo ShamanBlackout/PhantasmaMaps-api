@@ -429,6 +429,9 @@ if every source fails, the last good quote is served with `stale: true`.
 `npm run api`
 : Starts the Express API server from TypeScript sources (via `tsx`).
 
+`npm start`
+: Alias for `npm run api`. `tsx` is a runtime dependency, so source-based startup also works with production-only dependencies.
+
 `npm run build`
 : Bundles `src/startApiServer.ts` and `src/backfill.ts` into self-contained `dist/*.js` files with esbuild.
 
@@ -566,11 +569,44 @@ Operational note: verify the `npm` path on the server with `which npm`. If it is
 
 The API process is read-only. Keeping the HTTP server running does not ingest new blocks by itself. A worker process must also be running if new chain activity should appear in the database.
 
+### Production Startup and Browser Access
+
+For a source-based deployment, keep `src/`, `scripts/`, and the package manifests, then run:
+
+```bash
+npm ci --omit=dev --ignore-scripts
+npm start
+```
+
+This skips unused SDK Ledger/USB install scripts. It does not require committed
+`node_modules/` or `dist/`. For a bundled deployment, install development dependencies
+in the build stage, run `npm run build`, and use `npm run start:prod` in the runtime
+stage instead. Do not prune development dependencies before building.
+
+Set `NODE_ENV=production` and configure exact browser origins (scheme, hostname,
+and optional port; no path or trailing slash), for example:
+
+```text
+PHANTASMA_API_CORS_ORIGINS=https://maps.example.com,https://preview.example.com
+```
+
+An unset allowlist remains permissive for compatibility and emits a startup warning.
+Configured origins control browser access to responses, not access by non-browser
+clients. CORS is not authentication or denial-of-service protection.
+
+Apply traffic limits at the reverse proxy or CDN using its verified client IP,
+and prevent clients from bypassing that ingress if those limits are relied on.
+Do not blindly trust forwarded IP headers. An in-app limiter needs a trusted-proxy
+configuration matched to the deployment topology. Keep public chain queries public;
+any future private or administrative endpoints need server-side authentication,
+not an API key embedded in the frontend bundle.
+
 ### Docker Image
 
 The repository includes [Dockerfile](Dockerfile). It:
 
 - uses a two-stage `node:22-bookworm-slim` build
+- installs with `npm ci --ignore-scripts` to skip unused SDK Ledger/USB native builds
 - bundles `src/startApiServer.ts` and `src/backfill.ts` with esbuild (`npm run build`) in the build stage
 - ships only the self-contained `dist/` bundles in the runtime image (no `node_modules`, no TypeScript toolchain)
 - runs as the unprivileged `node` user
