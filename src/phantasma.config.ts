@@ -1,4 +1,11 @@
-process.loadEnvFile?.();
+try {
+  process.loadEnvFile();
+} catch (error) {
+  // .env is optional; containers and hosted platforms inject env vars directly.
+  if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    throw error;
+  }
+}
 
 function readNumber(name: string, fallback: number): number {
   const rawValue = process.env[name];
@@ -118,12 +125,21 @@ export const apiConfig = {
     "PHANTASMA_API_CACHE_STALE_MAX_MS",
     300000,
   ),
+  responseCacheMaxEntries: readPositiveNumber(
+    "PHANTASMA_API_RESPONSE_CACHE_MAX_ENTRIES",
+    1000,
+  ),
   precomputeTtlMs: readPositiveNumber(
     "PHANTASMA_API_PRECOMPUTE_TTL_MS",
     180000,
   ),
   transactionPageSizeDefault: readNumber("PHANTASMA_TX_PAGE_SIZE", 50),
   transactionPageSizeMax: readNumber("PHANTASMA_TX_PAGE_SIZE_MAX", 250),
+  // Deep OFFSET scans are expensive; reject pages that start beyond this row.
+  paginationMaxOffset: readPositiveNumber(
+    "PHANTASMA_API_PAGINATION_MAX_OFFSET",
+    1_000_000,
+  ),
   priceSaturnxBaseUrl:
     process.env.PRICE_SATURNX_API_URL || "https://apiops.saturnx.cc/v1/tokens",
   priceSaturnxNetwork: process.env.PRICE_SATURNX_NETWORK || "mainnet",
@@ -143,6 +159,8 @@ export const databaseConfig = {
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   ssl: readBoolean("PGSSL", false),
+  sslCaCert: process.env.DATABASE_CA_CERT || undefined,
+  sslRootCertPath: process.env.PGSSLROOTCERT || undefined,
 } as const;
 
 export const connectionPoolConfig = {
@@ -153,6 +171,8 @@ export const connectionPoolConfig = {
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   ssl: readBoolean("PGSSL", false),
+  sslCaCert: process.env.DATABASE_CA_CERT || undefined,
+  sslRootCertPath: process.env.PGSSLROOTCERT || undefined,
 } as const;
 
 export const cacheDatabaseConfig = {
@@ -163,4 +183,10 @@ export const cacheDatabaseConfig = {
   password: process.env.CACHE_PGPASSWORD,
   database: process.env.CACHE_PGDATABASE,
   ssl: readBoolean("CACHE_PGSSL", readBoolean("PGSSL", false)),
+  sslCaCert:
+    process.env.CACHE_DATABASE_CA_CERT ||
+    process.env.DATABASE_CA_CERT ||
+    undefined,
+  sslRootCertPath:
+    process.env.CACHE_PGSSLROOTCERT || process.env.PGSSLROOTCERT || undefined,
 } as const;

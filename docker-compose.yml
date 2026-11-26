@@ -2,19 +2,33 @@ services:
   api:
     build: .
     container_name: create-maps-api
+    init: true
     env_file:
       - .env
     ports:
       - "3000:3000"
-    command: npm run api
+    command: ["node", "dist/startApiServer.js"]
     restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:' + (process.env.PHANTASMA_API_PORT || 3000) + '/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
 
   backfill:
     build: .
     container_name: create-maps-backfill
+    init: true
     env_file:
       - .env
-    command: npm run backfill
+    command: ["node", "dist/backfill.js"]
     restart: "no"
     profiles:
       - jobs
@@ -22,9 +36,10 @@ services:
   sync:
     build: .
     container_name: create-maps-sync
+    init: true
     env_file:
       - .env
-    command: npm run sync
+    command: ["node", "dist/backfill.js"]
     restart: "no"
     profiles:
       - jobs

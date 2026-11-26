@@ -1,24 +1,46 @@
 import type { Response } from "express";
 import { apiConfig } from "./phantasma.config";
-import {
-  clearApiQueryCache,
-  getCachedApiResponse,
-  setCachedApiResponse,
-} from "./database";
+import { getCachedApiResponse, setCachedApiResponse } from "./database";
 
 interface CacheEntry<T> {
   value: T;
   expiresAt: number;
 }
 
-class SimpleCache<T> {
+const EXPIRED_SWEEP_INTERVAL_MS = 60_000;
+
+/**
+ * In-memory TTL cache bounded by entry count. When full, expired entries are
+ * dropped first, then the oldest-written entry is evicted.
+ */
+export class SimpleCache<T> {
   private cache = new Map<string, CacheEntry<T>>();
 
+  private sweepTimer: NodeJS.Timeout | null = null;
+
+  constructor(private readonly maxEntries: number) {}
+
   set(key: string, value: T, ttlMs: number): void {
+    // Re-insert so Map iteration order tracks write recency.
+    this.cache.delete(key);
+
+    if (this.cache.size >= this.maxEntries) {
+      this.sweepExpired();
+    }
+
+    while (this.cache.size >= this.maxEntries) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      this.cache.delete(oldestKey);
+    }
+
     this.cache.set(key, {
       value,
       expiresAt: Date.now() + ttlMs,
     });
+    this.ensureSweepTimer();
   }
 
   get(key: string): T | null {
@@ -36,14 +58,9 @@ class SimpleCache<T> {
     return entry.value;
   }
 
-  clear(keyPattern?: RegExp): void {
-    if (!keyPattern) {
-      this.cache.clear();
-      return;
-    }
-
-    for (const key of this.cache.keys()) {
-      if (keyPattern.test(key)) {
+  sweepExpired(now = Date.now()): void {
+    for (const [key, entry] of this.cache) {
+      if (now > entry.expiresAt) {
         this.cache.delete(key);
       }
     }
@@ -52,13 +69,27 @@ class SimpleCache<T> {
   size(): number {
     return this.cache.size;
   }
+
+  private ensureSweepTimer(): void {
+    if (this.sweepTimer) {
+      return;
+    }
+
+    this.sweepTimer = setInterval(
+      () => this.sweepExpired(),
+      EXPIRED_SWEEP_INTERVAL_MS,
+    );
+    this.sweepTimer.unref();
+  }
 }
 
 /**
  * Caches JSON responses with automatic TTL expiry.
  * Helps reduce database load for expensive queries.
  */
-export const responseCache = new SimpleCache<string>();
+export const responseCache = new SimpleCache<string>(
+  apiConfig.responseCacheMaxEntries,
+);
 
 /**
  * Middleware to serve cached response if available.
@@ -132,19 +163,4 @@ export function cacheMiddleware(
     );
     next();
   };
-}
-
-/**
- * Invalidates all cache entries matching a pattern.
- * Useful when data changes (e.g., after sync completes).
- */
-export function invalidateCache(pattern?: RegExp): void {
-  responseCache.clear(pattern);
-
-  // Pattern-based invalidation is in-memory only. Full invalidation also clears DB cache.
-  if (!pattern) {
-    void clearApiQueryCache().catch(() => {
-      // Ignore persistent cache clear errors; data freshness still improves via TTL.
-    });
-  }
 }

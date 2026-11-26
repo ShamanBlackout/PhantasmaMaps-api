@@ -56,8 +56,11 @@ The worker side processes blocks by height. Each block is claimed through the `b
 
 ```text
 src/
-  apiServer.ts
-  database.ts
+  apiServer.ts        # Express app assembly + server lifecycle
+  http/               # shared request parsing, response envelopes, cache keys, deps
+  routes/             # route handlers grouped by area
+  database.ts         # barrel re-exporting src/db/*
+  db/                 # pools, ingestion, graph/list queries, analytics, API cache
   rpcClient.ts
   syncService.ts
   transferParser.ts
@@ -229,7 +232,7 @@ Important note: [sql/maintenance/004_truncate_all.sql](sql/maintenance/004_trunc
 
 ## ENVIRONMENT
 
-The application loads environment variables through `process.loadEnvFile?.()` in Node 22, so a local `.env` file is read automatically when present.
+The application loads environment variables through `process.loadEnvFile()` in Node 22, so a local `.env` file is read automatically when present. A missing `.env` is ignored, so containers and hosted platforms can provide variables directly.
 
 ### Database
 
@@ -249,7 +252,19 @@ Connection mode by process:
 : Optional discrete PostgreSQL connection settings.
 
 `PGSSL`
-: `true` enables TLS with `rejectUnauthorized: false`.
+: `true` enables TLS with server-certificate and hostname verification. Without a custom CA certificate, Node.js uses its trusted system certificate authorities.
+
+`DATABASE_CA_CERT`
+: PEM-encoded CA certificate for the database server (literal `\n` sequences are accepted). When set, TLS is enabled and the server certificate and hostname are verified against this CA. On DigitalOcean App Platform you can bind this to `${your-db.CA_CERT}`.
+
+`PGSSLROOTCERT`
+: Path to a CA certificate file. Used like `DATABASE_CA_CERT` when that variable is not set.
+
+If the database certificate is not trusted by the Node.js system certificate store,
+configure `DATABASE_CA_CERT` or `PGSSLROOTCERT`. Connections fail rather than
+silently accepting an unverified server certificate.
+
+Note: node-postgres gives TLS parameters inside the connection string (`sslmode`, `sslrootcert`, ...) precedence over the settings above. To use `DATABASE_CA_CERT`/`PGSSLROOTCERT`, leave `sslmode` out of `DATABASE_URL`/`CONNECTION_POOL`.
 
 ### Dedicated Cache Database (Optional)
 
@@ -264,6 +279,9 @@ Use these only if you want the API response cache table (`api_query_cache`) in a
 `CACHE_PGSSL`
 : `true` enables TLS for cache DB. Defaults to `PGSSL` when omitted.
 
+`CACHE_DATABASE_CA_CERT`, `CACHE_PGSSLROOTCERT`
+: CA certificate (PEM or file path) for the cache DB. Default to `DATABASE_CA_CERT` / `PGSSLROOTCERT` when omitted.
+
 Cache freshness for token-scoped keys is validated against main DB
 `sync_state.updated_at` for that token symbol. If the cache row is older than
 the token sync checkpoint, the API treats it as stale, fetches fresh data from
@@ -275,7 +293,7 @@ main DB, updates `api_query_cache`, and serves the fresh response.
 : HTTP port. Default: `3000`.
 
 `PHANTASMA_API_CORS_ORIGINS`
-: Comma-separated allowed origins. If omitted, CORS is permissive.
+: Comma-separated allowed origins. If omitted, CORS is permissive and a startup warning is logged when `NODE_ENV=production`; set it to the deployed frontend origin(s) in production.
 
 ### Token Prices
 
@@ -384,6 +402,9 @@ if every source fails, the last good quote is served with `stale: true`.
 `PHANTASMA_TX_PAGE_SIZE_MAX`
 : Maximum transaction page size. Default: `250`.
 
+`PHANTASMA_API_PAGINATION_MAX_OFFSET`
+: Largest row offset accepted by paginated endpoints (`/transactions`, `/labels/nodes`). Requests for later pages return `400 PAGINATION_INVALID`. Default: `1000000`.
+
 `PHANTASMA_GRAPH_STAGE_CORE_EDGE_LIMIT`
 : Edge cap for staged address graph core fetches. Default: `300`.
 
@@ -396,6 +417,9 @@ if every source fails, the last good quote is served with `stale: true`.
 `PHANTASMA_API_CACHE_STALE_MAX_MS`
 : Maximum age for serving stale persistent-cache rows. Default: `300000`.
 
+`PHANTASMA_API_RESPONSE_CACHE_MAX_ENTRIES`
+: Maximum number of responses kept in the in-memory response cache. Expired entries are swept every minute; when full, the oldest entry is evicted. Default: `1000`.
+
 `PHANTASMA_API_PRECOMPUTE_TTL_MS`
 : TTL for persisted precomputed API view payloads. Default: `180000`.
 
@@ -407,7 +431,16 @@ if every source fails, the last good quote is served with `stale: true`.
 ## COMMANDS
 
 `npm run api`
-: Starts the Express API server.
+: Starts the Express API server from TypeScript sources (via `tsx`).
+
+`npm start`
+: Alias for `npm run api`. `tsx` is a runtime dependency, so source-based startup also works with production-only dependencies.
+
+`npm run build`
+: Bundles `src/startApiServer.ts` and `src/backfill.ts` into self-contained `dist/*.js` files with esbuild.
+
+`npm run start:prod`
+: Runs the bundled API server (`node dist/startApiServer.js`). Run `npm run build` first.
 
 `npm run sync`
 : Runs incremental sync from the current committed chain height to the latest RPC height.
@@ -540,15 +573,51 @@ Operational note: verify the `npm` path on the server with `which npm`. If it is
 
 The API process is read-only. Keeping the HTTP server running does not ingest new blocks by itself. A worker process must also be running if new chain activity should appear in the database.
 
+### Production Startup and Browser Access
+
+For a source-based deployment, keep `src/`, `scripts/`, and the package manifests, then run:
+
+```bash
+npm ci --omit=dev --ignore-scripts
+npm start
+```
+
+This skips unused SDK Ledger/USB install scripts. It does not require committed
+`node_modules/` or `dist/`. For a bundled deployment, install development dependencies
+in the build stage, run `npm run build`, and use `npm run start:prod` in the runtime
+stage instead. Do not prune development dependencies before building.
+
+Set `NODE_ENV=production` and configure exact browser origins (scheme, hostname,
+and optional port; no path or trailing slash), for example:
+
+```text
+PHANTASMA_API_CORS_ORIGINS=https://maps.example.com,https://preview.example.com
+```
+
+An unset allowlist remains permissive for compatibility and emits a startup warning.
+Configured origins control browser access to responses, not access by non-browser
+clients. CORS is not authentication or denial-of-service protection.
+
+Apply traffic limits at the reverse proxy or CDN using its verified client IP,
+and prevent clients from bypassing that ingress if those limits are relied on.
+Do not blindly trust forwarded IP headers. An in-app limiter needs a trusted-proxy
+configuration matched to the deployment topology. Keep public chain queries public;
+any future private or administrative endpoints need server-side authentication,
+not an API key embedded in the frontend bundle.
+
 ### Docker Image
 
 The repository includes [Dockerfile](Dockerfile). It:
 
-- uses `node:22-bookworm-slim`
-- runs `npm ci`
-- copies the repository into `/app`
+- uses a two-stage `node:22-bookworm-slim` build
+- installs with `npm ci --ignore-scripts` to skip unused SDK Ledger/USB native builds
+- bundles `src/startApiServer.ts` and `src/backfill.ts` with esbuild (`npm run build`) in the build stage
+- ships only the self-contained `dist/` bundles in the runtime image (no `node_modules`, no TypeScript toolchain)
+- runs as the unprivileged `node` user
 - exposes port `3000`
-- defaults to `npm run api`
+- defaults to `node dist/startApiServer.js`, so `SIGTERM` reaches the API directly and triggers a graceful shutdown
+
+`.env` files are excluded from the build context; pass configuration at runtime with `--env-file` or platform environment variables.
 
 Build the image:
 
@@ -559,22 +628,24 @@ docker build -t phantasmamaps-api .
 Run the API container:
 
 ```bash
-docker run --rm -p 3000:3000 --env-file .env phantasmamaps-api
+docker run --rm --init -p 3000:3000 --env-file .env phantasmamaps-api
 ```
 
 Run a one-off sync job from the same image:
 
 ```bash
-docker run --rm --env-file .env phantasmamaps-api npm run sync
+docker run --rm --init --env-file .env phantasmamaps-api node dist/backfill.js
 ```
 
 ### Docker Compose
 
 The repository includes [docker-compose.yml](docker-compose.yml) with three services:
 
-- `api`: long-running HTTP server on port `3000`
+- `api`: long-running HTTP server on port `3000`, with a `/health` container healthcheck
 - `backfill`: one-shot historical sync job under the `jobs` profile
 - `sync`: one-shot incremental sync job under the `jobs` profile
+
+All services run with `init: true` so signals are forwarded and zombie processes are reaped.
 
 Start the API service:
 
@@ -881,6 +952,10 @@ Example response:
 
 Returns the full stored graph for a token up to the configured edge cap.
 
+`edgeLimit` may request a smaller positive edge cap. It is included in the cache
+key and remains an upper bound if a degraded query is used. Values above
+`PHANTASMA_TOKEN_GRAPH_MAX_EDGES` are rejected.
+
 Example request:
 
 ```bash
@@ -971,7 +1046,13 @@ Example response:
 
 ### `GET /transactions`
 
-Returns paginated transaction data.
+Returns paginated transaction data. `total` counts all matching grouped
+transactions, including when the requested page is empty.
+
+Database `TIMESTAMP` values are interpreted as UTC and JavaScript dates are sent
+in UTC, independent of the Node host timezone. Configure the database timezone
+as UTC as well. This does not rewrite historical timestamps that may already
+have been stored in local time.
 
 Query parameters:
 

@@ -3,5 +3,15 @@
 .env.*
 !.env.example
 
-# Dry-run output
+# Dependencies and build output
+node_modules/
+dist/
+
+# Logs
+*.log
+
+# Dry-run / script output
 backfill-dry-run.json
+labeling-dry-run.json
+labeling-review-sample.json
+test-database-snapshot.json

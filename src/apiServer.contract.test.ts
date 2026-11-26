@@ -15,8 +15,6 @@ function createDeps(): ApiServerDeps {
       getAccount: async () => ({ balances: [] }),
     },
     cacheMiddlewareImpl: () => noCache(),
-    invalidateCacheImpl: () => {},
-    clearSubgraphCacheImpl: () => {},
     closeDatabasePoolImpl: async () => {},
     testDatabaseConnectionImpl: async () => {},
     getSyncStatesImpl: async () => [
@@ -140,6 +138,44 @@ test("GET /graph/token/:tokenSymbol accepts single-character symbols", async () 
 
   assert.equal(response.status, 200);
   assert.equal(receivedTokenSymbol, "D");
+});
+
+test("token graph edge caps reach queries and use distinct cache keys", async () => {
+  const deps = createDeps();
+  const cacheKeys: string[] = [];
+  const limits: Array<number | undefined> = [];
+  deps.cacheMiddlewareImpl = (key) => {
+    cacheKeys.push(key);
+    return noCache();
+  };
+  deps.getFullTokenGraphImpl = async (_symbol, options) => {
+    limits.push(options.edgeLimit);
+    return { nodes: [], edges: [] };
+  };
+  const app = createApiApp(deps);
+  assert.equal((await request(app).get("/graph/token/SOUL?edgeLimit=2")).status, 200);
+  assert.equal((await request(app).get("/graph/token/SOUL?edgeLimit=3")).status, 200);
+  assert.deepEqual(limits, [2, 3]);
+  assert.notEqual(cacheKeys[0], cacheKeys[1]);
+  const invalid = await request(app).get(
+    `/graph/token/SOUL?edgeLimit=${apiConfig.tokenGraphMaxEdges + 1}`,
+  );
+  assert.equal(invalid.status, 400);
+  assert.equal(invalid.body.error.code, "GRAPH_EDGE_LIMIT_EXCEEDED");
+});
+
+test("degraded token graphs do not exceed the caller's small edge cap", async () => {
+  const deps = createDeps();
+  const limits: Array<number | undefined> = [];
+  deps.getFullTokenGraphImpl = async (_symbol, options) => {
+    limits.push(options.edgeLimit);
+    if (limits.length === 1) throw new Error("temporary graph failure");
+    return { nodes: [], edges: [] };
+  };
+  const result = await request(createApiApp(deps)).get("/graph/token/SOUL?edgeLimit=2");
+  assert.equal(result.status, 200);
+  assert.deepEqual(limits, [2, 2]);
+  assert.equal(result.body.meta.appliedLimits.edgeLimit, 2);
 });
 
 test("GET /graph/token/:tokenSymbol accepts topHoldersLimit override", async () => {
@@ -318,6 +354,78 @@ test("GET /labels/nodes validates confidence bounds", async () => {
 
   assert.equal(response.status, 400);
   assert.equal(response.body?.error?.code, "INVALID_REQUEST");
+});
+
+test("GET /transactions floors fractional pages", async () => {
+  const deps = createDeps();
+  let capturedPage: unknown;
+  deps.getTransactionsPageImpl = async (options) => {
+    capturedPage = options.page;
+    return { items: [], total: 0, page: options.page, pageSize: 50 };
+  };
+
+  const app = createApiApp(deps);
+  const response = await request(app).get("/transactions?page=2.7");
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedPage, 2);
+  assert.equal(response.body?.meta?.pagination?.page, 2);
+});
+
+test("GET /transactions rejects pages beyond the maximum offset", async () => {
+  const deps = createDeps();
+  let called = false;
+  deps.getTransactionsPageImpl = async () => {
+    called = true;
+    return { items: [], total: 0, page: 1, pageSize: 50 };
+  };
+
+  const app = createApiApp(deps);
+  const response = await request(app).get("/transactions?page=1e308");
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body?.error?.code, "PAGINATION_INVALID");
+  assert.equal(called, false);
+});
+
+test("unexpected route errors return a generic message", async () => {
+  const deps = createDeps();
+  deps.getAvailableTokensImpl = async () => {
+    throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
+  };
+  const originalConsoleError = console.error;
+  console.error = () => {};
+
+  try {
+    const app = createApiApp(deps);
+    const response = await request(app).get("/tokens");
+
+    assert.equal(response.status, 500);
+    assert.equal(response.body?.error?.code, "INTERNAL_ERROR");
+    assert.doesNotMatch(JSON.stringify(response.body), /ECONNREFUSED/);
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
+test("GET /health does not expose database error details", async () => {
+  const deps = createDeps();
+  deps.testDatabaseConnectionImpl = async () => {
+    throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
+  };
+  const originalConsoleError = console.error;
+  console.error = () => {};
+
+  try {
+    const app = createApiApp(deps);
+    const response = await request(app).get("/health");
+
+    assert.equal(response.status, 503);
+    assert.equal(response.body?.data?.database, "down");
+    assert.doesNotMatch(JSON.stringify(response.body), /ECONNREFUSED/);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 test("GET /graph/address/:address/staged returns staged payload", async () => {
