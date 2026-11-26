@@ -2530,10 +2530,6 @@ function subgraphCacheSet(key: string, result: AddressSubgraphResult): void {
   });
 }
 
-export function clearSubgraphCache(): void {
-  subgraphCache.clear();
-}
-
 export async function getCachedApiResponse(
   cacheKey: string,
 ): Promise<CacheLookupResult> {
@@ -2657,19 +2653,6 @@ export async function setCachedApiResponse(
          updated_at = NOW()`,
       [cacheKey, payloadJson, ttlMs],
     );
-  } catch (error) {
-    if (isUndefinedTableError(error)) {
-      logQueryCacheTableMissingOnce();
-      return;
-    }
-
-    throw error;
-  }
-}
-
-export async function clearApiQueryCache(): Promise<void> {
-  try {
-    await cacheQueryPool.query("DELETE FROM public.api_query_cache");
   } catch (error) {
     if (isUndefinedTableError(error)) {
       logQueryCacheTableMissingOnce();

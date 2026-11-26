@@ -8,9 +8,8 @@ import compression from "compression";
 import { createHash, randomUUID } from "crypto";
 import { apiConfig } from "./phantasma.config";
 import { createPhantasmaRpcClient } from "./rpcClient";
-import { cacheMiddleware, invalidateCache } from "./responseCache";
+import { cacheMiddleware } from "./responseCache";
 import {
-  clearSubgraphCache,
   closeDatabasePool,
   findAddressPaths,
   getTokenDailyMetrics,
@@ -90,8 +89,6 @@ export type ApiServerDeps = {
     getAccount: (address: string) => Promise<unknown>;
   };
   cacheMiddlewareImpl: CacheMiddleware;
-  invalidateCacheImpl: () => void;
-  clearSubgraphCacheImpl: () => void;
   closeDatabasePoolImpl: () => Promise<void>;
   testDatabaseConnectionImpl: () => Promise<unknown>;
   getSyncStatesImpl: () => Promise<unknown[]>;
@@ -171,8 +168,6 @@ const tokenPriceService = createTokenPriceService({
 const defaultDeps: ApiServerDeps = {
   rpcClient: createPhantasmaRpcClient(),
   cacheMiddlewareImpl: cacheMiddleware,
-  invalidateCacheImpl: invalidateCache,
-  clearSubgraphCacheImpl: clearSubgraphCache,
   closeDatabasePoolImpl: closeDatabasePool,
   testDatabaseConnectionImpl: testDatabaseConnection,
   getSyncStatesImpl: getSyncStates,
@@ -258,6 +253,22 @@ function readStringList(value: string | undefined): string[] {
 
 function clampInt(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function readPageNumber(value: unknown, pageSize: number): number {
+  const page = Math.max(1, Math.floor(readPositiveInt(String(value ?? ""), 1)));
+  const maxOffset = apiConfig.paginationMaxOffset;
+
+  if ((page - 1) * pageSize > maxOffset) {
+    throw new ApiError(
+      400,
+      "PAGINATION_INVALID",
+      `page exceeds the maximum offset of ${maxOffset} rows`,
+      { page, pageSize, maxOffset },
+    );
+  }
+
+  return page;
 }
 
 function addIntegerStrings(left: unknown, right: unknown): string {
@@ -696,11 +707,23 @@ function handleRouteError(response: Response, error: unknown): void {
     return;
   }
 
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event: "api_unhandled_route_error",
+      timestamp: new Date().toISOString(),
+      requestId: response.locals.requestId ?? null,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    }),
+  );
+
+  // Never echo internal error text (SQL, upstream URLs) back to clients.
   sendError(
     response,
     500,
     "INTERNAL_ERROR",
-    error instanceof Error ? error.message : String(error),
+    "Internal server error. Use requestId when reporting this issue.",
   );
 }
 
@@ -818,17 +841,9 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
     }),
   );
 
-  app.use(express.json());
-
   app.use((request: Request, response: Response, next: NextFunction) => {
     response.locals.requestId = getRequestId(request);
     response.setHeader("X-Request-Id", response.locals.requestId);
-    response.setHeader("X-RateLimit-Limit", "120");
-    response.setHeader("X-RateLimit-Remaining", "120");
-    response.setHeader(
-      "X-RateLimit-Reset",
-      String(Math.floor(Date.now() / 1000) + 60),
-    );
     next();
   });
 
@@ -1580,7 +1595,6 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
         );
       }
 
-      const page = readPositiveInt(String(request.query.page ?? ""), 1);
       const pageSize = readPositiveInt(
         String(request.query.pageSize ?? ""),
         apiConfig.transactionPageSizeDefault,
@@ -1590,6 +1604,7 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
         1,
         apiConfig.transactionPageSizeMax,
       );
+      const page = readPageNumber(request.query.page, clampedPageSize);
       const directionRaw = String(request.query.dir ?? "")
         .trim()
         .toLowerCase();
@@ -1703,12 +1718,12 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
         request.query.windowDays ? String(request.query.windowDays) : undefined,
         30,
       );
-      const page = readPositiveInt(String(request.query.page ?? ""), 1);
       const pageSize = clampInt(
         readPositiveInt(String(request.query.pageSize ?? ""), 50),
         1,
         apiConfig.transactionPageSizeMax,
       );
+      const page = readPageNumber(request.query.page, pageSize);
 
       if (tokenSymbol && !isValidTokenSymbol(tokenSymbol)) {
         throw new ApiError(
@@ -1989,17 +2004,11 @@ export function createApiApp(deps: ApiServerDeps = defaultDeps) {
     },
   );
 
-  app.post("/admin/cache/clear", (_request: Request, response: Response) => {
-    deps.invalidateCacheImpl();
-    deps.clearSubgraphCacheImpl();
-    sendSuccess(_request, response, {
-      ok: true,
-      message: "All caches cleared",
-    });
-  });
-
   return app;
 }
+
+// Keep below Docker's default 10s stop grace period.
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 8_000;
 
 export function startApiServer(deps: ApiServerDeps = defaultDeps): {
   app: ReturnType<typeof createApiApp>;
@@ -2014,11 +2023,28 @@ export function startApiServer(deps: ApiServerDeps = defaultDeps): {
   server.headersTimeout = 66_000;
   server.requestTimeout = 75_000;
 
-  const shutdown = async (): Promise<void> => {
-    await deps.closeDatabasePoolImpl();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdown = (): Promise<void> => {
+    if (!shutdownPromise) {
+      shutdownPromise = (async () => {
+        // Drain in-flight requests before closing the pools they depend on.
+        await new Promise<void>((resolve) => {
+          const forceCloseTimer = setTimeout(
+            () => server.closeAllConnections(),
+            SHUTDOWN_DRAIN_TIMEOUT_MS,
+          );
+          forceCloseTimer.unref();
+          server.close(() => {
+            clearTimeout(forceCloseTimer);
+            resolve();
+          });
+          server.closeIdleConnections();
+        });
+        await deps.closeDatabasePoolImpl();
+      })();
+    }
+
+    return shutdownPromise;
   };
 
   return {

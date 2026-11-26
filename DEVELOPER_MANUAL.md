@@ -32,8 +32,8 @@ Purpose: defines the Express application and read-only HTTP API.
 - `/graph/address/:address` handler: returns an address-scoped graph for a token.
 - `/tokens/:tokenSymbol/top-holders` handler: returns top holders for a token.
 - `/graph/token/:tokenSymbol` handler: returns the stored graph for a token.
-- `/transactions` handler: returns paginated transaction rows.
-- `shutdown()`: closes the database pool and stops the HTTP server on `SIGINT` or `SIGTERM`.
+- `/transactions` handler: returns paginated transaction rows. Pages starting beyond `PHANTASMA_API_PAGINATION_MAX_OFFSET` rows are rejected with `PAGINATION_INVALID`.
+- `shutdown()`: idempotent. Stops accepting connections, drains in-flight requests (forcing sockets closed after 8 seconds), then closes the database pools. `src/startApiServer.ts` calls it on `SIGINT` or `SIGTERM` and exits the process once it resolves.
 
 ### `src/phantasma.config.ts`
 

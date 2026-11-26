@@ -384,6 +384,9 @@ if every source fails, the last good quote is served with `stale: true`.
 `PHANTASMA_TX_PAGE_SIZE_MAX`
 : Maximum transaction page size. Default: `250`.
 
+`PHANTASMA_API_PAGINATION_MAX_OFFSET`
+: Largest row offset accepted by paginated endpoints (`/transactions`, `/labels/nodes`). Requests for later pages return `400 PAGINATION_INVALID`. Default: `1000000`.
+
 `PHANTASMA_GRAPH_STAGE_CORE_EDGE_LIMIT`
 : Edge cap for staged address graph core fetches. Default: `300`.
 
@@ -395,6 +398,9 @@ if every source fails, the last good quote is served with `stale: true`.
 
 `PHANTASMA_API_CACHE_STALE_MAX_MS`
 : Maximum age for serving stale persistent-cache rows. Default: `300000`.
+
+`PHANTASMA_API_RESPONSE_CACHE_MAX_ENTRIES`
+: Maximum number of responses kept in the in-memory response cache. Expired entries are swept every minute; when full, the oldest entry is evicted. Default: `1000`.
 
 `PHANTASMA_API_PRECOMPUTE_TTL_MS`
 : TTL for persisted precomputed API view payloads. Default: `180000`.

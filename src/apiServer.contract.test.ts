@@ -15,8 +15,6 @@ function createDeps(): ApiServerDeps {
       getAccount: async () => ({ balances: [] }),
     },
     cacheMiddlewareImpl: () => noCache(),
-    invalidateCacheImpl: () => {},
-    clearSubgraphCacheImpl: () => {},
     closeDatabasePoolImpl: async () => {},
     testDatabaseConnectionImpl: async () => {},
     getSyncStatesImpl: async () => [
@@ -318,6 +316,58 @@ test("GET /labels/nodes validates confidence bounds", async () => {
 
   assert.equal(response.status, 400);
   assert.equal(response.body?.error?.code, "INVALID_REQUEST");
+});
+
+test("GET /transactions floors fractional pages", async () => {
+  const deps = createDeps();
+  let capturedPage: unknown;
+  deps.getTransactionsPageImpl = async (options) => {
+    capturedPage = options.page;
+    return { items: [], total: 0, page: options.page, pageSize: 50 };
+  };
+
+  const app = createApiApp(deps);
+  const response = await request(app).get("/transactions?page=2.7");
+
+  assert.equal(response.status, 200);
+  assert.equal(capturedPage, 2);
+  assert.equal(response.body?.meta?.pagination?.page, 2);
+});
+
+test("GET /transactions rejects pages beyond the maximum offset", async () => {
+  const deps = createDeps();
+  let called = false;
+  deps.getTransactionsPageImpl = async () => {
+    called = true;
+    return { items: [], total: 0, page: 1, pageSize: 50 };
+  };
+
+  const app = createApiApp(deps);
+  const response = await request(app).get("/transactions?page=1e308");
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body?.error?.code, "PAGINATION_INVALID");
+  assert.equal(called, false);
+});
+
+test("unexpected route errors return a generic message", async () => {
+  const deps = createDeps();
+  deps.getAvailableTokensImpl = async () => {
+    throw new Error("connect ECONNREFUSED 10.0.0.5:5432");
+  };
+  const originalConsoleError = console.error;
+  console.error = () => {};
+
+  try {
+    const app = createApiApp(deps);
+    const response = await request(app).get("/tokens");
+
+    assert.equal(response.status, 500);
+    assert.equal(response.body?.error?.code, "INTERNAL_ERROR");
+    assert.doesNotMatch(JSON.stringify(response.body), /ECONNREFUSED/);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 test("GET /graph/address/:address/staged returns staged payload", async () => {
